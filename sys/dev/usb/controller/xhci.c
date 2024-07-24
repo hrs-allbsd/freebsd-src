@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010-2022 Hans Petter Selasky
+ * Copyright (c) 2020-2024 Hiroki Sato <hrs@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -83,6 +84,7 @@
 
 #include <dev/usb/controller/xhci.h>
 #include <dev/usb/controller/xhcireg.h>
+#include <dev/usb/controller/xhci_dbc.h>
 
 #define	XHCI_BUS2SC(bus) \
 	__containerof(bus, struct xhci_softc, sc_bus)
@@ -92,7 +94,7 @@
 	    &((struct which##64 *)(ptr))->field.ctx : \
 	    &((struct which *)(ptr))->field)
 
-static SYSCTL_NODE(_hw_usb, OID_AUTO, xhci, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+SYSCTL_NODE(_hw_usb, OID_AUTO, xhci, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "USB XHCI");
 
 static int xhcistreams;
@@ -153,6 +155,9 @@ struct xhci_std_temp {
 	uint8_t			step_td;
 	uint8_t			do_isoc_sync;
 };
+
+static void xhci_debug_reg_read(struct xhci_softc *);
+static void xhci_debug_reg_restore(struct xhci_softc *);
 
 static void	xhci_do_poll(struct usb_bus *);
 static void	xhci_device_done(struct usb_xfer *, usb_error_t);
@@ -321,6 +326,10 @@ xhci_start_controller(struct xhci_softc *sc)
 	if (err)
 		return (err);
 
+	if (dbc_enable && sc->sc_udbc != NULL) {
+		xhci_debug_reg_restore(sc);
+		xhci_debug_enable(sc->sc_udbc);
+	}
 	/* set up number of device slots */
 	DPRINTF("CONFIG=0x%08x -> 0x%08x\n",
 	    XREAD4(sc, oper, XHCI_CONFIG), sc->sc_noslot);
@@ -568,6 +577,31 @@ xhci_init(struct xhci_softc *sc, device_t self, uint8_t dma32)
 
 	/* enable 64Kbyte control endpoint quirk */
 	sc->sc_bus.control_ep_quirk = (xhcictlquirk ? 1 : 0);
+
+	/* Check if DbC is available. */
+	if (dbc_enable) {
+		sc->sc_udbc = malloc(sizeof(*sc->sc_udbc), M_DEVBUF, 
+		    M_WAITOK | M_ZERO);
+		sc->sc_udbc->sc_xhci = sc;
+
+		if (xhci_debug_probe(sc->sc_udbc)) {
+			/* Initialization */
+			sc->sc_dbc_off = sc->sc_udbc->sc_dbc_off;
+
+			udbcons_init(sc, self);
+			xhci_debug_reg_read(sc);
+
+			device_printf(self, "DbC is available and %s\n",
+			    (XREAD4(sc, dbc, XHCI_DCCTRL) & XHCI_DCCTRL_DCE)
+				? "running"
+				: "not running");
+		} else {
+			device_printf(self, "DbC not available\n");
+			free(sc->sc_udbc, M_DEVBUF);
+			sc->sc_dbc_off = 0;
+			sc->sc_udbc = NULL;
+		}
+	}
 
 	temp = XREAD4(sc, capa, XHCI_HCSPARAMS1);
 
@@ -4406,3 +4440,39 @@ static const struct usb_bus_methods xhci_bus_methods = {
 	.set_hw_power_sleep = xhci_set_hw_power_sleep,
 	.set_endpoint_mode = xhci_set_endpoint_mode,
 };
+
+static void
+xhci_debug_reg_read(struct xhci_softc *sc)
+{
+	struct xhci_debug_reg *r;
+
+	if (sc->sc_dbc_off == 0)
+		return;
+
+	r = &sc->sc_udbc->reg;
+
+	r->erstsz = XREAD4(sc, dbc, XHCI_DCERSTSZ);
+	r->erstba = XREAD44LH(sc, dbc, XHCI_DCERSTBA);
+	r->erdp = XREAD44LH(sc, dbc, XHCI_DCERDP);
+	r->cp = XREAD44LH(sc, dbc, XHCI_DCCP);
+	r->ddi1 = XREAD4(sc, dbc, XHCI_DCDDI1);
+	r->ddi2 = XREAD4(sc, dbc, XHCI_DCDDI2);
+}
+static void
+xhci_debug_reg_restore(struct xhci_softc *sc)
+{
+	struct xhci_debug_reg *r;
+
+	if (sc->sc_dbc_off == 0)
+		return;
+
+	r = &sc->sc_udbc->reg;
+
+	XWRITE4(sc, dbc, XHCI_DCERSTSZ, r->erstsz);
+
+	XWRITE44LH(sc, dbc, XHCI_DCERSTBA, r->erstba);
+	XWRITE44LH(sc, dbc, XHCI_DCERDP, r->erdp);
+	XWRITE44LH(sc, dbc, XHCI_DCCP, r->cp);
+	XWRITE4(sc, dbc, XHCI_DCDDI1, r->ddi1);
+	XWRITE4(sc, dbc, XHCI_DCDDI2, r->ddi2);
+}

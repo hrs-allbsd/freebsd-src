@@ -383,3 +383,6 @@ options 	HID_DEBUG		# enable debug msgs
 device		hid			# Generic HID support
 device		hidbus			# Generic HID Bus
 options 	IICHID_SAMPLING		# Workaround missing GPIO INTR support
+
+options		GDB
+options		DDB

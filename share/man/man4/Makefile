@@ -563,6 +563,7 @@ MAN=	aac.4 \
 	tun.4 \
 	twe.4 \
 	tws.4 \
+	udbc.4 \
 	udp.4 \
 	udplite.4 \
 	ure.4 \
