@@ -26,8 +26,9 @@
  *
  */
 
-/* Dummy functions to use xhci_pci_match() */
+extern EFI_GUID pciio_guid;
 
+/* Dummy functions to use xhci_pci_match() */
 typedef struct {  
 	UINT16	VendorId;
 	UINT16	DeviceId;

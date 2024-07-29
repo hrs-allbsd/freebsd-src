@@ -86,22 +86,6 @@ enum {
 	(((r)->deq <= (r)->enq) ? (r)->deq + DC_WORK_RING_LEN : (r)->deq) \
 	    - (r)->enq)
 
-struct xhci_debug_reg {
-	uint32_t id;
-	uint32_t doorbell;
-	uint32_t erstsz;
-	uint32_t rsvdz;
-	uint64_t erstba;
-	uint64_t erdp;
-	uint32_t ctrl;
-	uint32_t st;
-	uint32_t portsc;
-	uint32_t rsvdp;
-	uint64_t cp;
-	uint32_t ddi1;
-	uint32_t ddi2;
-};
-
 struct xhci_debug_ctx {
 	uint32_t info[16];
 	struct xhci_endp_ctx64 ep_out;
@@ -113,11 +97,13 @@ struct xhci_debug_work_ring {
 	uint32_t enq;
 	uint32_t deq;
 	uint64_t paddr;
+	uint64_t len;
 };
 
 struct xhci_debug_ring {
 	struct xhci_trb	*trb;	/* Array of TRBs */
 	uint64_t	paddr;	/* base address of TRBs */
+	uint64_t	len;	/* length of TRBs */
 	uint32_t	enq;	/* The offset of the enqueue ptr */
 	uint32_t	deq;	/* The offset of the dequeue ptr */
 	uint8_t		cyc;	/* Cycle state toggled on each wrap-around */
@@ -167,26 +153,33 @@ struct dma {
 /*
  * This softc is used in kernel and loader.
  */
+struct xhci_softc;
 #define	XHCI_DC_COOKIE	0x4d79b718
 struct xhci_debug_softc {
-	struct xhci_debug_reg	reg;
+	struct xhci_debug_softc	*sc_next;
+	bool			sc_next_fixup;
+	struct mtx		sc_mtx;
+	uint32_t		sc_cookie;
+
 	struct xhci_debug_ctx	*udb_ctx;
 	uint64_t		udb_ctx_paddr;
+	uint64_t		udb_ctx_len;
+
 	struct xhci_event_ring_seg *udb_erst;
 	uint64_t		udb_erst_paddr;
+	uint64_t		udb_erst_len;
+
 	struct xhci_debug_ring	udb_ering;
 	struct xhci_debug_ring	udb_oring;
 	struct xhci_debug_ring	udb_iring;
+
 	char			*udb_str;
 	uint64_t		udb_str_paddr;
-	struct xhci_debug_softc	*sc_udb;
+	uint64_t		udb_str_len;
 
-	uint32_t		sc_cookie;
 	uint32_t		sc_state;
 	uint32_t		sc_flags;
-#if 0
 #define	XHCI_DEBUG_FLAGS_GDB	0x0001
-#endif
 	uint64_t		sc_polling_count;
 	bool			sc_init;
 	bool			sc_init_dma;
@@ -195,23 +188,22 @@ struct xhci_debug_softc {
 	char			sc_hostname[256];
 	char			sc_serial[256];
 
-	struct mtx		sc_mtx;
-
 	/* in kernel, sc_*_off in struct xhci_softc is used */
 	uint32_t		sc_dbc_off;
 	uint32_t		sc_capa_off;	/* zero */
+	uint32_t		sc_pci_rid;
 #ifdef _KERNEL
-	struct xhci_softc	*sc_xhci;
+	struct xhci_softc	*sc_xhci;	/* in kernel only */
 #else
-	struct console		*sc_cons;	/* loader console */
-
-	EFI_HANDLE		sc_efi_hand;
+	struct console		*sc_cons;	/* in loader only */
 	EFI_PCI_IO_PROTOCOL	*sc_efi_pciio;
+	EFI_HANDLE		sc_efi_hand;
 	struct dma		dma_desc[DMA_DESC_CAP];
 #endif
 };
 
-int xhci_debug_probe(struct xhci_debug_softc *);
+uint32_t xhci_debug_probe(struct xhci_debug_softc *);
+struct xhci_debug_softc *xhci_debug_alloc_softc(struct xhci_softc *);
 bool xhci_debug_enable(struct xhci_debug_softc *);
 void xhci_debug_disable(struct xhci_debug_softc *);
 

@@ -58,13 +58,11 @@ v2p(struct xhci_debug_softc *sc, void *virt)
 	UINTN needed;
 	UINTN mapped;
 	struct dma *dma;
-	EFI_PCI_IO_PROTOCOL *pci;
 	EFI_STATUS status;
 	EFI_PHYSICAL_ADDRESS paddr;
 	VOID *mapping;
 
 	dma = NULL;
-	pci = sc->sc_efi_pciio;
 	for (i = 0; i < nitems(sc->dma_desc); i++) {
 		dma = &sc->dma_desc[i];
 
@@ -97,10 +95,11 @@ found:
 
 	needed = dma->pages << EFI_PAGE_SHIFT;
 	mapped = needed;
-	status = pci->Map(pci, EfiPciIoOperationBusMasterCommonBuffer,
+	status = sc->sc_efi_pciio->Map(sc->sc_efi_pciio,
+	    EfiPciIoOperationBusMasterCommonBuffer,
 	    (void *)virt, &mapped, &paddr, &mapping);
 	if (EFI_ERROR(status) || mapped != needed) {
-		DEBUG_PRINTF(1, "pci->Map failed: rc: 0x%lx, mapped: %lu, needed: %lu\n",
+		DEBUG_PRINTF(1, "pciio->Map failed: rc: 0x%lx, mapped: %lu, needed: %lu\n",
 		    status, mapped, needed);
 		return (0);
 	}
@@ -123,6 +122,7 @@ udb_sc_malloc(size_t len, EFI_HANDLE *h, EFI_PCI_IO_PROTOCOL *pciio)
 	VOID *addr;
 	int pages;
 
+	DEBUG_PRINTF(2, "%s: called\n", __func__);
 	sc = NULL;
 	pages = sizeof(*sc) / PAGE_SIZE + 1;
 	status = pciio->AllocateBuffer(pciio,
@@ -153,11 +153,33 @@ udb_sc_malloc(size_t len, EFI_HANDLE *h, EFI_PCI_IO_PROTOCOL *pciio)
 	return (sc);
 }
 
+void
+xhci_debug_export_softc(struct xhci_debug_softc *sc0)
+{
+	struct xhci_debug_softc *sc;
+	uint64_t len;
+	char buf[256];
+
+	if (sc0 == NULL)
+		return;
+
+	len = 0;
+	for (sc = sc0; sc != NULL; sc = sc->sc_next)
+		len += sizeof(*sc);
+
+	snprintf(buf, sizeof(buf), "%p", (void *)(uintptr_t)v2p(sc0, sc0));
+	buf[sizeof(buf) - 1] = '\0';
+	setenv("hw.usb.xhci.dbc.softc.paddr", buf, 1);
+
+	snprintf(buf, sizeof(buf), "%zu", len);
+	buf[sizeof(buf) - 1] = '\0';
+	setenv("hw.usb.xhci.dbc.softc.len", buf, 1);
+}
+
 int
 xhci_debug_init_dma(struct xhci_debug_softc *sc)
 {
 	struct xhci_debug_softc *sc_udb;
-	char buf[1024];
 #define	ALLOC_DMA(p, type, order)				\
 	do { 							\
 		p = (type)udb_alloc_dma(sc, order); 		\
@@ -169,14 +191,6 @@ xhci_debug_init_dma(struct xhci_debug_softc *sc)
 
 	if (sc->sc_init_dma)
 		return (0);
-
-	/* Export softc */
-	snprintf(buf, sizeof(buf), "%p", (void *)(uintptr_t)v2p(sc, sc));
-	buf[sizeof(buf) - 1] = '\0';
-	setenv("hw.usb.xhci.dbc.softc.paddr", buf, 1);
-	snprintf(buf, sizeof(buf), "%zu", sizeof(*sc));
-	buf[sizeof(buf) - 1] = '\0';
-	setenv("hw.usb.xhci.dbc.softc.len", buf, 1);
 
 	ALLOC_DMA(sc->udb_ctx, struct xhci_debug_ctx *, 0);
 	ALLOC_DMA(sc->udb_erst, struct xhci_event_ring_seg *, 0);
@@ -191,42 +205,30 @@ xhci_debug_init_dma(struct xhci_debug_softc *sc)
 	/* Export CTX, ERST, and STR */
 #define	SETADDR(n, len) do { \
 		sc->udb_##n##_paddr = (uintptr_t)v2p(sc, sc->udb_##n); \
-		snprintf(buf, sizeof(buf), "%p", \
-		    (void *)v2p(sc, sc->udb_##n)); \
-		buf[sizeof(buf) - 1] = '\0'; \
-		setenv("hw.usb.xhci.dbc." #n ".paddr", buf, 1); \
-		snprintf(buf, sizeof(buf), "%lu", \
-		    (uint64_t)len); \
-		buf[sizeof(buf) - 1] = '\0'; \
-		setenv("hw.usb.xhci.dbc." #n ".len", buf, 1); \
+		sc->udb_##n##_len = len; \
 	} while (0)
 	SETADDR(ctx, PAGE_SIZE);
 	SETADDR(erst, PAGE_SIZE);
 	SETADDR(str, PAGE_SIZE);
 
 	/* Export TRB rings. */
-#define	SETADDR_RING(n, paddr, trb, len) do { \
-		sc->udb_##paddr = (uintptr_t)v2p(sc, sc->udb_##trb); \
-		snprintf(buf, sizeof(buf), "%p", (void *)sc->udb_##paddr); \
-		buf[sizeof(buf) - 1] = '\0'; \
-		setenv("hw.usb.xhci.dbc." #paddr, buf, 1); \
-		snprintf(buf, sizeof(buf), "%lu", (uint64_t)len); \
-		buf[sizeof(buf) - 1] = '\0'; \
-		setenv("hw.usb.xhci.dbc." #n ".len", buf, 1); \
+#define	SETADDR_RING(n, paddr, lenp, buf, len) do { \
+		sc->udb_##paddr = (uintptr_t)v2p(sc, sc->udb_##buf); \
+		sc->udb_##lenp = len; \
 	} while (0)
 	
-	SETADDR_RING(ering, ering.paddr, ering.trb,
+	SETADDR_RING(ering, ering.paddr, ering.len, ering.trb,
 	    PAGE_SIZE * (1UL << DC_TRB_RING_ORDER));
-	SETADDR_RING(iring, iring.paddr, iring.trb,
+	SETADDR_RING(iring, iring.paddr, iring.len, iring.trb,
 	    PAGE_SIZE * (1UL << DC_TRB_RING_ORDER));
-	SETADDR_RING(oring, oring.paddr, oring.trb,
+	SETADDR_RING(oring, oring.paddr, oring.len, oring.trb,
 	    PAGE_SIZE * (1UL << DC_TRB_RING_ORDER));
-	SETADDR_RING(ering.work, ering.work.paddr, ering.work.buf,
-	    PAGE_SIZE * (1UL << DC_WORK_RING_ORDER));
-	SETADDR_RING(iring.work, iring.work.paddr, iring.work.buf,
-	    PAGE_SIZE * (1UL << DC_WORK_RING_ORDER));
-	SETADDR_RING(oring.work, oring.work.paddr, oring.work.buf,
-	    PAGE_SIZE * (1UL << DC_WORK_RING_ORDER));
+	SETADDR_RING(ering.work, ering.work.paddr, ering.work.len,
+	    ering.work.buf, PAGE_SIZE * (1UL << DC_WORK_RING_ORDER));
+	SETADDR_RING(iring.work, iring.work.paddr, iring.work.len,
+	    iring.work.buf, PAGE_SIZE * (1UL << DC_WORK_RING_ORDER));
+	SETADDR_RING(oring.work, oring.work.paddr, oring.work.len,
+	    oring.work.buf, PAGE_SIZE * (1UL << DC_WORK_RING_ORDER));
 
 	sc->sc_init_dma = true;
 

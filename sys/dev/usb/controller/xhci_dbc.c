@@ -55,6 +55,8 @@
 # include <dev/usb/usb_controller.h>
 # include <dev/usb/usb_bus.h>
 # include <dev/usb/controller/xhci.h>
+# include <dev/pci/pcireg.h>
+# include <dev/pci/pcivar.h>
 # ifdef __aarch64__
 # include <machine/cpufunc.h>
 # endif
@@ -208,6 +210,7 @@ int dbc_enable = 1;
 int dbc_polling_time = 50;
 int dbc_baud = 115200;
 int dbc_gdb;
+uint32_t dbc_pci_rid;
 
 #ifdef _KERNEL
 static SYSCTL_NODE(_hw_usb_xhci, OID_AUTO, dbc, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
@@ -222,6 +225,8 @@ SYSCTL_INT(_hw_usb_xhci_dbc, OID_AUTO, polling_time, CTLFLAG_RWTUN,
     &dbc_polling_time, 0, "Polling interval");
 SYSCTL_INT(_hw_usb_xhci_dbc, OID_AUTO, gdb, CTLFLAG_RWTUN, &dbc_gdb, 0,
     "Set to enable GDB");
+SYSCTL_INT(_hw_usb_xhci_dbc, OID_AUTO, pci_rid, CTLFLAG_RWTUN,
+    &dbc_pci_rid, 0, "PCI RID for console");
 #endif
 
 static void
@@ -301,12 +306,6 @@ udb_dump_info(struct xhci_debug_softc *sc)
 	printf("    ddi1: 0x%x, ddi2: 0x%x\n",
 	    _XREAD4(sc, dbc, XHCI_DCDDI1),
 	    _XREAD4(sc, dbc, XHCI_DCDDI2));
-
-#ifndef _KERNEL
-	/* Loader console structure */
-	printf("=============\n");
-	printf("cons->c_flags = %x\n", sc->sc_cons->c_flags);
-#endif
 	printf("=============\n");
 	xhci_debug_ring_boundary(&sc->udb_ering, true); /* Update er->enq */
 	xhci_debug_show_ring(&sc->udb_ering, 0);
@@ -387,9 +386,8 @@ xhci_debug_enable(struct xhci_debug_softc *sc)
 {
 	bool ret;
 
-	if (xhci_debug_softc_fixup(sc) == false)
+	if (sc == NULL)
 		return (false);
-
 	ret = true;
 	if (xhci_debug_update_state(sc) == XHCI_DCPORT_ST_OFF) {
 		ret = xhci_debug_set_regbit(sc, XHCI_DCCTRL, XHCI_DCCTRL_DCE,
@@ -506,7 +504,7 @@ xhci_debug_init_ring(struct xhci_debug_softc *sc)
 	return (0);
 }
 
-int
+uint32_t
 xhci_debug_probe(struct xhci_debug_softc *sc)
 {
 	uint32_t hccp1;
@@ -527,166 +525,172 @@ xhci_debug_probe(struct xhci_debug_softc *sc)
 	     eecp += XHCI_XECP_NEXT(eec) << 2) {
 		eec = _XREAD4(sc, capa, eecp);
 
-		if (XHCI_XECP_ID(eec) != XHCI_ID_USB_DEBUG) {
-			DEBUG_PRINTF(3, "%s: looking for %02x, %02x\n",
-			    __func__, XHCI_XECP_ID(eec), XHCI_ID_USB_DEBUG);
-			continue;
-		}
+		DEBUG_PRINTF(1, "%s: Looking for xECP: "
+		    "expected=%02x, found=%02x, next=%04x\n", __func__,
+		    XHCI_ID_USB_DEBUG, XHCI_XECP_ID(eec),
+		    XHCI_XECP_NEXT(eec) << 2);
+
+		if (XHCI_XECP_ID(eec) == XHCI_ID_USB_DEBUG)
+			break;
 	}
-	if (XHCI_XECP_ID(eec) != XHCI_ID_USB_DEBUG)
+	if (eecp == 0 || XHCI_XECP_ID(eec) == 0)
 		goto notfound;
 
-	DEBUG_PRINTF(1, "%s: DBC_ID was found at %08x\n", __func__, eecp);
-	sc->sc_dbc_off = eecp;
+	DEBUG_PRINTF(1, "%s: DbC was found at %08x\n", __func__, eecp);
 
-	return (1);
-
+	return (eecp);
 notfound:
-	DEBUG_PRINTF(1, "%s: DBC_ID was not found\n", __func__);
+	DEBUG_PRINTF(1, "%s: DbC was not found\n", __func__); 
 
 	return (0);
 }
 
 /*
- * The hw.usb.xhci.dbc mibs are used to pass physical addresses
+ * The hw.usb.xhci.dbc.softc variable is used to pass physical addresses
  * from the loader to the kernel.  This function simply relies on
  * the direct mapping at this moment and works only on the platforms
  * supporting it.
  */
-static bool
-xhci_debug_softc_fixup(struct xhci_debug_softc *sc)
+/* XXX: shoud support linked-list of the softcs */
+struct xhci_debug_softc * 
+xhci_debug_alloc_softc(struct xhci_softc *sc_xhci)
 {
-	if (sc->sc_fixup_done)
-		return (true);
-#if _KERNEL
-	struct trb_addrs {
-		const char *key;
-		struct xhci_debug_ring *ringp;
-	} parray[] = {
-		{ "hw.usb.xhci.dbc.ering", &sc->udb_ering },
-		{ "hw.usb.xhci.dbc.oring", &sc->udb_oring },
-		{ "hw.usb.xhci.dbc.iring", &sc->udb_iring },
-		{ NULL, NULL }
-	};
-	struct trb_addrs *p;
+	struct xhci_debug_softc *sc = NULL;
+#ifdef _KERNEL
+	struct xhci_debug_softc *sc0;
 	quad_t addr, len;
-	char buf[256];
+	uintptr_t rid;
 
 	KASSERT(PMAP_HAS_DMAP, ("direct-map required"));
 
+	getenv_quad("hw.usb.xhci.dbc.softc.paddr", &addr);
+	getenv_quad("hw.usb.xhci.dbc.softc.len", &len);
+
+	device_printf(sc_xhci->sc_bus.parent, "%s: enter\n", __func__);
+
+	if (addr == 0 || len == 0)
+		return (NULL);
+	/* softc array */
+	sc0 = (struct xhci_debug_softc *)
+	    pmap_map(NULL, (vm_paddr_t)addr, (vm_paddr_t)addr + len, 0);
+	if (pmap_change_attr((vm_offset_t)sc0,
+	    (vm_offset_t)len, VM_MEMATTR_DEVICE) != 0)
+		printf("%s: pmap_change_attr() failed: %p\n",
+		    __func__, (void *)sc0);
+
+	if (pci_get_id(sc_xhci->sc_bus.parent, PCI_ID_RID, &rid) != 0) {
+		device_printf(sc_xhci->sc_bus.parent,
+		    "pci_get_id() failed\n");
+		return (NULL);
+	}
+	/* Fixing up the link pointers */
+	for (sc = sc0; sc != NULL && sc->sc_next != NULL; sc = sc->sc_next) {
+		device_printf(sc_xhci->sc_bus.parent,
+		    "%s: fixing up sc->sc_next: %p\n", __func__, sc->sc_next);
+		if (sc->sc_next_fixup == false) {
+			addr = (vm_paddr_t)sc->sc_next;
+			len = sizeof(*sc);
+			sc->sc_next = (struct xhci_debug_softc *)
+			    pmap_map(NULL, (vm_paddr_t)addr,
+				(vm_paddr_t)addr + len, 0);
+			if (pmap_change_attr((vm_offset_t)sc->sc_next,
+			    (vm_offset_t)len, VM_MEMATTR_DEVICE) != 0) {
+				printf("%s: pmap_change_attr() failed: %p\n",
+				    __func__, (void *)sc->sc_next);
+				return (NULL);
+			}
+			sc->sc_next_fixup = true;
+		}
+	}
+	for (sc = sc0; sc != NULL; sc = sc->sc_next)
+		if (sc->sc_pci_rid == (uint32_t)rid)
+			break;
+	if (sc == NULL) {
+		device_printf(sc->sc_xhci->sc_bus.parent,
+		    "RID not found: expected=0x%04x\n", (uint32_t)rid);
+		return (NULL);
+	}
+	sc->sc_xhci = sc_xhci;
+
+	/* Do not forget to fixup. */
+	if (xhci_debug_softc_fixup(sc) == false)
+		sc = NULL;
+
+	device_printf(sc_xhci->sc_bus.parent,
+	    "%s: resulting sc = %p\n", __func__, sc);
+#endif
+
+	return (sc);
+}
+
+static bool
+xhci_debug_softc_fixup(struct xhci_debug_softc *sc)
+{
+#ifdef _KERNEL
+	quad_t addr, len;
+
+	KASSERT(sc != NULL, ("null sc"));
+
+	if (sc->sc_fixup_done == true)
+		return (false);
+	if (sc->sc_cookie != XHCI_DC_COOKIE) {
+		device_printf(sc->sc_xhci->sc_bus.parent,
+		    "COOKIE mismatch: expected=0x%04x, found=0x%04x\n",
+		    XHCI_DC_COOKIE, sc->sc_cookie);
+		return (false);
+	}
 	mtx_init(&sc->sc_mtx, "xhci_dbc_sc_mtx", NULL, MTX_SPIN);
 	mtx_init(&sc->udb_ering.mtx, "xhci_dbc_ering_mtx", NULL, MTX_SPIN);
 	mtx_init(&sc->udb_iring.mtx, "xhci_dbc_iring_mtx", NULL, MTX_SPIN);
 	mtx_init(&sc->udb_oring.mtx, "xhci_dbc_oring_mtx", NULL, MTX_SPIN);
 
-	getenv_quad("hw.usb.xhci.dbc.softc.paddr", &addr);
-	getenv_quad("hw.usb.xhci.dbc.softc.len", &len);
-	sc->sc_udb = (struct xhci_debug_softc *)
-	    pmap_map(NULL, (vm_paddr_t)addr, (vm_paddr_t)addr + len, 0);
-	if (pmap_change_attr((vm_offset_t)sc->sc_udb,
-	    (vm_offset_t)len, VM_MEMATTR_DEVICE) != 0)
-		printf("%s: pmap_change_attr() failed: %p",
-		    __func__, (void *)sc->sc_udb);
+#define	MAP(mib, type)	do {						\
+		addr = mib##_paddr;					\
+		len = mib##_len;					\
+		(mib) = (type)						\
+		    pmap_map(NULL, (vm_paddr_t)addr, (vm_paddr_t)addr + len, \
+			0); \
+		if (pmap_change_attr((vm_offset_t)(mib),		\
+		    (vm_offset_t)len, VM_MEMATTR_DEVICE) != 0)		\
+			printf("%s: pmap_change_attr() failed: %p\n",	\
+			    __func__, (void *)(mib));			\
+	} while (0)
+#define	MAP_RING(mib)	do {						\
+		addr = (mib).paddr;					\
+		len = (mib).len;					\
+		(mib).trb = (struct xhci_trb *)				\
+		    pmap_map(NULL, (vm_paddr_t)addr, (vm_paddr_t)addr + len, \
+			0); \
+		if (pmap_change_attr((vm_offset_t)(mib).trb,		\
+		    (vm_offset_t)len, VM_MEMATTR_DEVICE) != 0)		\
+			printf("%s: pmap_change_attr() failed: %p\n",	\
+			    __func__, (void *)(mib).trb);		\
+		addr = (mib).work.paddr;				\
+		len = (mib).work.len;					\
+		(mib).work.buf = (char *)				\
+		    pmap_map(NULL, (vm_paddr_t)addr, (vm_paddr_t)addr + len, \
+			0); \
+		if (pmap_change_attr((vm_offset_t)(mib).trb,		\
+		    (vm_offset_t)len, VM_MEMATTR_DEVICE) != 0)		\
+			printf("%s: pmap_change_attr() failed: %p\n",	\
+			    __func__, (void *)(mib).work.buf);		\
+	} while (0)
 
-	/* If the softc was not initialized, ignore it. */
-	if (sc->sc_udb->sc_cookie != XHCI_DC_COOKIE)
-		return (false);
+	MAP(sc->udb_ctx, struct xhci_debug_ctx *);
+	MAP(sc->udb_erst, struct xhci_event_ring_seg *);
+	MAP(sc->udb_str, char *);
+	MAP_RING(sc->udb_ering);
+	MAP_RING(sc->udb_iring);
+	MAP_RING(sc->udb_oring);
 
-	getenv_quad("hw.usb.xhci.dbc.ctx.paddr", &addr);
-	getenv_quad("hw.usb.xhci.dbc.ctx.len", &len);
-	sc->udb_ctx = (struct xhci_debug_ctx *)
-	    pmap_map(NULL, (vm_paddr_t)addr, (vm_paddr_t)addr + len, 0);
-	if (pmap_change_attr((vm_offset_t)sc->udb_ctx,
-	    (vm_offset_t)len, VM_MEMATTR_DEVICE) != 0)
-		printf("%s: pmap_change_attr() failed: %p",
-		    __func__, (void *)sc->udb_ctx);
-
-	getenv_quad("hw.usb.xhci.dbc.erst.paddr", &addr);
-	getenv_quad("hw.usb.xhci.dbc.erst.len", &len);
-	sc->udb_erst = (struct xhci_event_ring_seg *)
-	    pmap_map(NULL, (vm_paddr_t)addr, (vm_paddr_t)addr + len, 0);
-	if (pmap_change_attr((vm_offset_t)sc->udb_erst,
-	    (vm_offset_t)len, VM_MEMATTR_DEVICE) != 0)
-		printf("%s: pmap_change_attr() failed: %p",
-		    __func__, (void *)sc->udb_erst);
-
-	getenv_quad("hw.usb.xhci.dbc.str.paddr", &addr);
-	getenv_quad("hw.usb.xhci.dbc.str.len", &len);
-	sc->udb_str = (char *)
-	    pmap_map(NULL, (vm_paddr_t)addr, (vm_paddr_t)addr + len, 0);
-	if (pmap_change_attr((vm_offset_t)sc->udb_str,
-	    (vm_offset_t)len, VM_MEMATTR_DEVICE) != 0)
-		printf("%s: pmap_change_attr() failed: %p",
-		    __func__, (void *)sc->udb_str);
-
-	for (p = &parray[0]; p->key != NULL; p++) {
-		snprintf(buf, sizeof(buf), "%s.paddr", p->key);
-		buf[sizeof(buf) - 1] = '\0';
-		getenv_quad(buf, &addr);
-		snprintf(buf, sizeof(buf), "%s.len", p->key);
-		buf[sizeof(buf) - 1] = '\0';
-		getenv_quad(buf, &len);
-
-		p->ringp->paddr = (uintptr_t)addr;
-		p->ringp->trb =
-		    (struct xhci_trb *)pmap_map(NULL, (vm_paddr_t)addr,
-			(vm_paddr_t)addr + len, 0);
-		if (pmap_change_attr((vm_offset_t)p->ringp->trb,
-		    (vm_offset_t)len, VM_MEMATTR_DEVICE) != 0)
-			printf("%s: pmap_change_attr() failed: %p",
-			    __func__, (void *)p->ringp->trb);
-	}
-	getenv_quad("hw.usb.xhci.dbc.ering.work.paddr", &addr);
-	getenv_quad("hw.usb.xhci.dbc.ering.work.len", &len);
-	sc->udb_ering.work.paddr = (uintptr_t)addr;
-	sc->udb_ering.work.buf = (char *)
-	    pmap_map(NULL, (vm_paddr_t)addr, (vm_paddr_t)addr + len, 0);
-	if (pmap_change_attr((vm_offset_t)sc->udb_ering.work.buf,
-	    (vm_offset_t)len, VM_MEMATTR_DEVICE) != 0)
-		printf("%s: pmap_change_attr() failed: %p",
-		    __func__, (void *)sc->udb_ering.work.buf);
-
-	getenv_quad("hw.usb.xhci.dbc.iring.work.paddr", &addr);
-	getenv_quad("hw.usb.xhci.dbc.iring.work.len", &len);
-	sc->udb_iring.work.paddr = (uintptr_t)addr;
-	sc->udb_iring.work.buf = (char *)
-	    pmap_map(NULL, (vm_paddr_t)addr, (vm_paddr_t)addr + len, 0);
-	if (pmap_change_attr((vm_offset_t)sc->udb_iring.work.buf,
-	    (vm_offset_t)len, VM_MEMATTR_DEVICE) != 0)
-		printf("%s: pmap_change_attr() failed: %p",
-		    __func__, (void *)sc->udb_iring.work.buf);
-
-	getenv_quad("hw.usb.xhci.dbc.oring.work.paddr", &addr);
-	getenv_quad("hw.usb.xhci.dbc.oring.work.len", &len);
-	sc->udb_oring.work.paddr = (uintptr_t)addr;
-	sc->udb_oring.work.buf = (char *)
-	    pmap_map(NULL, (vm_paddr_t)addr, (vm_paddr_t)addr + len, 0);
-	if (pmap_change_attr((vm_offset_t)sc->udb_oring.work.buf,
-	    (vm_offset_t)len, VM_MEMATTR_DEVICE) != 0)
-		printf("%s: pmap_change_attr() failed: %p",
-		    __func__, (void *)sc->udb_oring.work.buf);
-
-	/* Reset the pointers and TRBs after reset. */
+	/* Reset the pointers and TRBs. */
 	/* XXX: This should be revisited to support suspend/resume. */
 	xhci_debug_ring_init(sc, &sc->udb_ering, 0, XHCI_DCDB_INVAL);
-	memcpy(sc->udb_ering.ec, sc->sc_udb->udb_ering.ec,
-	    sizeof(sc->udb_ering.ec));
 	xhci_debug_ring_init(sc, &sc->udb_iring, 1, XHCI_DCDB_IN);
-	memcpy(sc->udb_iring.ec, sc->sc_udb->udb_iring.ec,
-	    sizeof(sc->udb_iring.ec));
 	xhci_debug_ring_init(sc, &sc->udb_oring, 1, XHCI_DCDB_OUT);
-	memcpy(sc->udb_oring.ec, sc->sc_udb->udb_oring.ec,
-	    sizeof(sc->udb_oring.ec));
 
-	strlcpy(sc->sc_hostname, sc->sc_udb->sc_hostname,
-	    sizeof(sc->sc_hostname));
-	strlcpy(sc->sc_serial, sc->sc_udb->sc_serial,
-	    sizeof(sc->sc_serial));
-	sc->sc_flags = sc->sc_udb->sc_flags;
-	sc->sc_init_dma = sc->sc_udb->sc_init_dma;
-	sc->sc_init = sc->sc_udb->sc_init;
-#endif
 	sc->sc_fixup_done = true;
+#endif
 	return (true);
 }
 
@@ -1558,18 +1562,23 @@ sysctl_sc_flags_gdb(SYSCTL_HANDLER_ARGS)
 	unsigned int val;
 	int error;
 
+	val = 0;
 	if (udbcons0.xhci == NULL)
-		return (-1);
+		goto error;
 	if ((sc = udbcons0.xhci->sc_udbc) == NULL)
-		return (-1);
+		goto error;
 	val = (sc->sc_flags & XHCI_DEBUG_FLAGS_GDB) == XHCI_DEBUG_FLAGS_GDB;
 
+error:
 	error = sysctl_handle_int(oidp, &val, 0, req);
 	if (error != 0 ||
 	    req->newptr == NULL ||
 	    val == ((sc->sc_flags & XHCI_DEBUG_FLAGS_GDB)
 		== XHCI_DEBUG_FLAGS_GDB))
 		return (error);
+
+	if (sc == NULL)
+		return (0);
 
 	if (val == 0)
 		sc->sc_flags &= ~XHCI_DEBUG_FLAGS_GDB;
@@ -1590,20 +1599,24 @@ sysctl_sc_polling_count(SYSCTL_HANDLER_ARGS)
 	uint64_t val;
 	int error;
 
+	val = 0;
 	if (udbcons0.xhci == NULL)
-		return (-1);
+		goto error;
 	if ((sc = udbcons0.xhci->sc_udbc) == NULL)
-		return (-1);
+		goto error;
 
 	val = sc->sc_polling_count;
-
+error:
 	error = sysctl_handle_64(oidp, &val, 0, req);
-	if (error)
+	if (error != 0 ||
+	    req->newptr == NULL)
 		return (error);
 
+	if (sc == NULL)
+		return (0);
 	sc->sc_polling_count = val;
 
-	return (error);
+	return (0);
 }
 SYSCTL_PROC(_hw_usb_xhci_dbc, OID_AUTO, polling_count,
     CTLTYPE_U64 | CTLFLAG_RD | CTLFLAG_MPSAFE,
@@ -1617,13 +1630,14 @@ SYSCTL_PROC(_hw_usb_xhci_dbc, OID_AUTO, polling_count,
 		struct sbuf *sb;			\
 		int error;				\
 							\
-		if (udbcons0.xhci == NULL)		\
-			return (-1);			\
-		if ((sc = udbcons0.xhci->sc_udbc) == NULL) \
-			return (-1);			\
-							\
 		sb = SBUF_NEW_AUTO();			\
+		if (udbcons0.xhci == NULL ||		\
+		    (sc = udbcons0.xhci->sc_udbc) == NULL) { \
+			SBUF_PRINTF(sb, "none");	\
+			goto error;			\
+		}					\
 		DUMP_RING(&sc->udb_##ring, false);	\
+error:							\
 		if (SBUF_FINISH(sb) != 0)		\
 			return (-1);			\
 		error = sysctl_handle_opaque(oidp,	\
@@ -1643,19 +1657,46 @@ SYSCTL_FUNC_DEFINE_SHOW_RING(oring, "Output Ring");
 SYSCTL_FUNC_DEFINE_SHOW_RING(iring, "Input Ring");
 
 static int
+sysctl_sc_pci_rid_current(SYSCTL_HANDLER_ARGS)
+{
+	struct xhci_debug_softc *sc;
+	char buf[64];
+	int error;
+
+	snprintf(buf, sizeof(buf), "none");
+	if (udbcons0.xhci == NULL ||
+	    (sc = udbcons0.xhci->sc_udbc) == NULL)
+		goto error;
+	snprintf(buf, sizeof(buf), "0x%04x(%d:%d:%d)",
+	    sc->sc_pci_rid,
+	    PCI_RID2BUS(sc->sc_pci_rid),
+	    PCI_RID2SLOT(sc->sc_pci_rid),
+	    PCI_RID2FUNC(sc->sc_pci_rid));
+error:
+	buf[sizeof(buf) - 1] = '\0';
+	error = sysctl_handle_opaque(oidp, buf, sizeof(buf), req);
+
+	return (error);
+}
+SYSCTL_PROC(_hw_usb_xhci_dbc, OID_AUTO, pci_rid_current,
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
+    NULL, 0, sysctl_sc_pci_rid_current, "A", "DbC PCI rid"); 
+
+static int
 sysctl_sc_state(SYSCTL_HANDLER_ARGS)
 {
 	struct xhci_debug_softc *sc;
 	char buf[64];
 	int error;
 
-	if (udbcons0.xhci == NULL)
-		return (-1);
-	if ((sc = udbcons0.xhci->sc_udbc) == NULL)
-		return (-1);
+	snprintf(buf, sizeof(buf), "none");
+	if (udbcons0.xhci == NULL ||
+	    (sc = udbcons0.xhci->sc_udbc) == NULL)
+		goto error;
 	snprintf(buf, sizeof(buf), "%s(%02x)", strstate[sc->sc_state],
 	    sc->sc_state);
 	buf[sizeof(buf) - 1] = '\0';
+error:
 	error = sysctl_handle_opaque(oidp, buf, sizeof(buf), req);
 
 	return (error);
@@ -1671,17 +1712,17 @@ sysctl_dcst_portnum(SYSCTL_HANDLER_ARGS)
 	uint32_t temp;
 	int error, val;
 
-	if (udbcons0.xhci == NULL)
-		return (-1);
-	if ((sc = udbcons0.xhci->sc_udbc) == NULL)
-		return (-1);
+	val = 0;
+	if (udbcons0.xhci == NULL ||
+	    (sc = udbcons0.xhci->sc_udbc) == NULL)
+		goto error;
 	temp = _XREAD4(sc, dbc, XHCI_DCST);
 	val = XHCI_DCST_PORT_GET(le32toh(temp));
 
+error:
 	error = sysctl_handle_int(oidp, &val, 0, req);
-	if (error)
-		return (error);
-	return (0);
+
+	return (error);
 }
 SYSCTL_PROC(_hw_usb_xhci_dbc, OID_AUTO, portnum,
     CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE,
@@ -1694,17 +1735,17 @@ sysctl_dcst_er(SYSCTL_HANDLER_ARGS)
 	uint32_t temp;
 	int error, val;
 
-	if (udbcons0.xhci == NULL)
-		return (-1);
-	if ((sc = udbcons0.xhci->sc_udbc) == NULL)
-		return (-1);
+	val = 0;
+	if (udbcons0.xhci == NULL ||
+	    (sc = udbcons0.xhci->sc_udbc) == NULL)
+		goto error;
 	temp = _XREAD4(sc, dbc, XHCI_DCST);
 	val = XHCI_DCST_ER_GET(le32toh(temp));
 
+error:
 	error = sysctl_handle_int(oidp, &val, 0, req);
-	if (error)
-		return (error);
-	return (0);
+
+	return (error);
 }
 SYSCTL_PROC(_hw_usb_xhci_dbc, OID_AUTO, dcst_er,
     CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE,
@@ -1717,17 +1758,17 @@ sysctl_dcst_sbr(SYSCTL_HANDLER_ARGS)
 	uint32_t temp;
 	int error, val;
 
-	if (udbcons0.xhci == NULL)
-		return (-1);
-	if ((sc = udbcons0.xhci->sc_udbc) == NULL)
-		return (-1);
+	val = 0;
+	if (udbcons0.xhci == NULL ||
+	    (sc = udbcons0.xhci->sc_udbc) == NULL)
+		goto error;
 	temp = _XREAD4(sc, dbc, XHCI_DCST);
 	val = XHCI_DCST_SBR_GET(le32toh(temp));
 
+error:
 	error = sysctl_handle_int(oidp, &val, 0, req);
-	if (error)
-		return (error);
-	return (0);
+
+	return (error);
 	
 }
 SYSCTL_PROC(_hw_usb_xhci_dbc, OID_AUTO, dcst_sbr,
@@ -1870,6 +1911,22 @@ int
 udbcons_init(struct xhci_softc *sc, device_t dev)
 {
 	struct udbcons_priv *cons;
+
+	if (sc->sc_udbc == NULL)
+		return (0);
+	if (udbcons0.xhci != NULL) 	/* XXX: must support multi instances */
+		return (0);
+
+	/* If hw.usb.xhci.dbc.pci_rid is specified, use it */
+	if (dbc_pci_rid != 0 && dbc_pci_rid != sc->sc_udbc->sc_pci_rid) {
+		device_printf(sc->sc_bus.parent,
+		    "console was not activated because RID mismatch: "
+		    "expected=%u, found=%u\n", dbc_pci_rid,
+		    sc->sc_udbc->sc_pci_rid);
+		return (0);
+	}
+
+	device_printf(sc->sc_bus.parent, "Creating /dev/udbcons\n");
 
 	cons = &udbcons0;
 	cons->dev = dev;

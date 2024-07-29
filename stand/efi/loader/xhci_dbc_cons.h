@@ -26,7 +26,10 @@
  *
  */
 extern struct console udb_console;
+
+extern struct xhci_debug_softc *udb_sc0;
 extern struct xhci_debug_softc *udb_sc;
+
 extern const char *udb_hostname;
 extern const char *udb_serial;
 extern const char *udb_gdb;

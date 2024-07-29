@@ -120,7 +120,7 @@ xhci_pci_match(device_t self)
 	case 0x461e8086:
 		return ("Intel Alder Lake-P Thunderbolt 4 USB controller");
 	case 0x51ed8086:
-		return ("Intel Alder Lake USB 3.2 controller");
+		return ("Intel Alder Lake PCH USB 3.2 controller");
 	case 0x5aa88086:
 		return ("Intel Apollo Lake USB 3.0 controller");
 	case 0x7ae08086:
@@ -151,6 +151,8 @@ xhci_pci_match(device_t self)
 		return ("Intel Union Point USB 3.0 controller");
 	case 0xa36d8086:
 		return ("Intel Cannon Lake USB 3.1 controller");
+	case 0xa71e8086:
+		return ("Intel Raptor Lake-P Thunderbolt 4 USB Controller");
 
 	case 0xa01b177d:
 		return ("Cavium ThunderX USB 3.0 controller");

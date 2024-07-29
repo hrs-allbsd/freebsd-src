@@ -35,13 +35,15 @@
 
 #include "xhci_dbc_cons.h"
 #include "xhci_dbc_pci.h"
-#include "xhci_dbc_dma.h"	/* udb_init_dma() */
+#include "xhci_dbc_dma.h"
 #include <dev/usb/controller/xhci_pci.h>
 #include <dev/usb/controller/xhci_private.h>
 #include <dev/usb/controller/xhci_dbc.h>
 #include <dev/usb/controller/xhci_dbc_private.h>
 
 static void udbc_probe(struct console *);
+static bool udbc_alloc(struct console *, EFI_PCI_IO_PROTOCOL *, EFI_HANDLE *);
+
 static int udbc_getc(void);
 static void udbc_putc(int);
 static int udbc_ischar(void);
@@ -57,33 +59,22 @@ struct console udb_console = {
 	.c_ready = udbc_ischar
 };
 
-struct xhci_debug_softc *udb_sc;
+struct xhci_debug_softc *udb_sc0;	/* linked-list */
+struct xhci_debug_softc *udb_sc;	/* active instance */
 const char *udb_hostname;
 const char *udb_serial;
-const char *udb_gdb;
 
 static void
 udbc_probe(struct console *cons)
 {
-	struct xhci_debug_softc *sc;
 	EFI_STATUS status;
-	EFI_HANDLE *h0, *h;
 	EFI_PCI_IO_PROTOCOL *pciio;
+	EFI_HANDLE *h0, *h;
 	UINTN hlen;
-	char buf[32], *p;
 	int i, error;
 	device_t dev;
 
-	/* XXX: There kenv should be in c_init() function. */
-	p = getenv("hw.usb.xhci.dbc.enable");
-	if (p != NULL && p[0] == '0')
-		return;
-	udb_hostname = getenv("hw.usb.xhci.dbc.hostname");
-	udb_serial = getenv("hw.usb.xhci.dbc.serial");
-	udb_gdb = getenv("hw.usb.xhci.dbc.gdb");
-
 	h0 = h = NULL;
-	sc = NULL;
 	if (udb_sc != NULL)
 		return;
 
@@ -98,10 +89,10 @@ udbc_probe(struct console *cons)
 	if (EFI_ERROR(status))
 		goto error;
 
-	h = NULL;
 	for (UINTN i = 0; i < hlen; i++) {
+		h = h0[i];
 		status = BS->HandleProtocol(
-		    h0[i],
+		    h,
 		    &pciio_guid,
 		    (VOID **)&pciio);
 		if (EFI_ERROR(status))
@@ -117,31 +108,55 @@ udbc_probe(struct console *cons)
 		if (pci_get_headertype(dev) != PCIM_HDRTYPE_NORMAL &&
 		    pci_get_headertype(dev) != PCIM_MFDEV)
 			continue;
-		if (xhci_pci_match(dev) != NULL) {
-			h = h0[i];
-			break;
-		}
-	}
-	if (h == NULL) {	/* Not found. */
-		DEBUG_PRINTF(1, "%s: Compatible xHC not found.\n", __func__);
-		goto error;
+		if (xhci_pci_match(dev) != NULL)
+			(void) udbc_alloc(cons, pciio, h);
 	}
 
-	/* h and pciio will be stored in the softc. */
+	if (udb_sc0 != NULL) {
+		cons->c_flags = C_PRESENTIN | C_PRESENTOUT;
+		xhci_debug_export_softc(udb_sc0);
+
+		return;
+	}
+error:
+	DEBUG_PRINTF(1, "%s: Compatible xHC not found.\n", __func__);
+	(void) BS->FreePool(h0);
+	return;
+}
+
+static bool
+udbc_alloc(struct console *cons, EFI_PCI_IO_PROTOCOL *pciio, EFI_HANDLE *h)
+{
+	struct xhci_debug_softc *sc;
+	UINTN SegmentNumber, BusNumber, DeviceNumber, FunctionNumber;
+	EFI_STATUS status;
+	int error;
+
+	if (pciio == NULL || h == NULL)
+		return (false);
+	status = pciio->GetLocation(
+	    pciio,
+	    &SegmentNumber,
+	    &BusNumber,
+	    &DeviceNumber,
+	    &FunctionNumber);
+	if (EFI_ERROR(status))
+		return (false);
 	sc = udb_sc_malloc(sizeof(*sc), h, pciio);
 	if (sc == NULL)
-		goto error;
-	udb_sc = sc;
-	sc->sc_cons = cons;
+		return (false);
+	sc->sc_pci_rid = PCI_RID(BusNumber, DeviceNumber, FunctionNumber);
+	sc->sc_efi_pciio = pciio;
+	sc->sc_efi_hand = h;
 
-	/* sc_efi_pciio must be valid before this. */
-	if (!xhci_debug_probe(sc))
+	sc->sc_dbc_off = xhci_debug_probe(sc);
+	if (sc->sc_dbc_off == 0)
 		goto error;
 
 	xhci_debug_disable(sc);
-	cons->c_flags = C_PRESENTIN | C_PRESENTOUT;
-
 	xhci_debug_update_state(sc);
+
+	DEBUG_PRINTF(2, "%s: before init\n", __func__);
 	if (sc->sc_init == false) {
 		error = xhci_debug_init_dma(sc);
 		if (error) {
@@ -158,32 +173,65 @@ udbc_probe(struct console *cons)
 	}
 	xhci_debug_enable(sc);
 
-	return;
+	/* Add a new entry */
+	if (udb_sc0 != NULL)
+		sc->sc_next = udb_sc0;
+	udb_sc0 = sc;
+
+	return (true);
 error:
-	(void) BS->FreePool(h0);
-#if 0
-	/* XXX: sc cannot be free using free().  Use udb_free_dma() instead. */
-	free(sc);
-#endif
-	sc = NULL;
-	return;
+	/* XXX: free softc */
+	return (false);
 }
 
 static int
 udbc_init(int arg)
 {
-	struct xhci_debug_softc *sc = udb_sc;
+	struct xhci_debug_softc *sc;
+	uint32_t rid;
+	char *p, *endp;
 	int error;
 
+	p = getenv("hw.usb.xhci.dbc.enable");
+	if (p != NULL && p[0] == '0')
+		return (CMD_OK);
+
+	p = getenv("hw.usb.xhci.dbc.debug");
+	if (p != NULL) {
+		dbc_debug = strtol(p, &endp, 0);
+		if (*endp != '\0')
+			dbc_debug = 0;
+	}
+
+	rid = 0;
+	p = getenv("hw.usb.xhci.dbc.pci_rid");
+	if (p != NULL) {
+		rid = strtol(p, &endp, 0);
+		if (*endp != '\0')
+			rid = 0;
+	}
+
+	/* XXX: too late */
+	udb_hostname = getenv("hw.usb.xhci.dbc.hostname");
+	udb_serial = getenv("hw.usb.xhci.dbc.serial");
+
+	for (sc = udb_sc0; sc != NULL; sc->sc_next) {
+		/* If RID is not specified, use the first one. */
+		if ((rid == 0 || rid == sc->sc_pci_rid) &&
+		    sc->sc_dbc_off != 0)
+			break;
+	}
 	if (sc == NULL) {		/* allocated in c_probe */
 		DEBUG_PRINTF(1, "USB DbC not found\n");
 		return (CMD_ERROR);
 	}
-	if (sc->sc_dbc_off == 0) {	/* set in c_probe */
-		DEBUG_PRINTF(1, "USB DbC register not found\n");
-		return (CMD_ERROR);
-	}
+
+	p = getenv("hw.usb.xhci.dbc.gdb");
+	if (p != NULL && p[0] != '0')
+		sc->sc_flags |= XHCI_DEBUG_FLAGS_GDB;
+
 	xhci_debug_enable(sc);
+	udb_sc = sc;
 	xhci_debug_event_dequeue(sc);
 
 	return (CMD_OK);
