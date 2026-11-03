@@ -1,0 +1,38 @@
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\" Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
+.Dd November 4, 2026
+.Dt LS7A_RTC 4 loongarch64
+.Os
+.Sh NAME
+.Nm ls7a_rtc
+.Nd Loongson LS7A real-time clock
+.Sh SYNOPSIS
+To compile this driver into the kernel, place the following line in your
+kernel configuration file:
+.Bd -ragged -offset indent
+.Cd "device ls7a_rtc"
+.Ed
+.Sh DESCRIPTION
+The
+.Nm
+driver provides the battery-backed calendar clock in the Loongson LS7A
+chipset.
+It initializes system time at boot and stores updated time through the
+system clock framework with one tenth of a second resolution.
+Alarm interrupts are not used.
+.Pp
+The driver attaches to ACPI devices with the identifier
+.Li LOON0001
+or FDT nodes compatible with
+.Li loongson,ls7a-rtc .
+.Sh SEE ALSO
+.Xr date 1 ,
+.Xr acpi 4
+.Sh HISTORY
+The
+.Nm
+driver first appeared in
+.Fx 16.0 .
+.Sh AUTHORS
+The driver and this manual page were written by
+.An Hiroki Sato Aq Mt hrs@FreeBSD.org .

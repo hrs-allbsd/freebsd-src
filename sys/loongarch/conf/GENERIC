@@ -195,6 +195,7 @@ options		ZFS
 include "std.debug"
 
 # Platform management and disk controllers
+device		ls7a_rtc	# LS7A real-time clock
 device		acpi
 device		smbios
 device		cpufreq

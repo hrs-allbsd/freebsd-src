@@ -2,6 +2,7 @@ MAN=	cpuic.4 \
 	eioic.4 \
 	loongarch_syscon.4 \
 	loongarch_timer.4 \
+	ls7a_rtc.4 \
 	pch_pic.4
 
 _ARCH_SUBDIR=	loongarch64

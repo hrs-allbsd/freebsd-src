@@ -282,3 +282,4 @@ dev/isci/scil/scif_sas_task_request_state_handlers.c		optional isci
 dev/isci/scil/scif_sas_task_request_states.c			optional isci
 dev/isci/scil/scif_sas_timer.c					optional isci
 dev/nfe/if_nfe.c		optional	nfe pci
+dev/loongson/ls7a_rtc.c		optional ls7a_rtc
