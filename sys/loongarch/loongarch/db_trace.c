@@ -99,7 +99,7 @@ db_stack_trace_cmd(struct thread *td, struct unwind_state *frame)
 				    tf->tf_badvaddr);
 			}
 			frame->sp = tf->tf_sp;
-			frame->fp = tf->tf_s[0];
+			frame->fp = tf->tf_fp;
 			frame->pc = tf->tf_era;
 			if (!INKERNEL(frame->fp))
 				break;
@@ -123,7 +123,7 @@ db_trace_thread(struct thread *thr, int count)
 	ctx = kdb_thr_ctx(thr);
 
 	frame.sp = ctx->pcb_sp;
-	frame.fp = ctx->pcb_s[0];
+	frame.fp = ctx->pcb_regs[22];
 	frame.pc = ctx->pcb_ra;
 	db_stack_trace_cmd(thr, &frame);
 	return (0);
@@ -133,8 +133,11 @@ void
 db_trace_self(void)
 {
 	struct unwind_state frame;
+	uintptr_t sp;
 
-	frame.sp = (uintptr_t)__builtin_frame_address(1);
+	__asm __volatile("move %0, $sp" : "=&r" (sp));
+
+	frame.sp = sp;
 	frame.fp = (uintptr_t)__builtin_frame_address(0);
 	frame.pc = (uintptr_t)db_trace_self;
 	db_stack_trace_cmd(curthread, &frame);

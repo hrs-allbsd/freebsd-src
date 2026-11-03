@@ -113,8 +113,8 @@ db_show_mdpcpu(struct pcpu *pc)
 	db_printf("curpmap      = %p\n", pc->pc_curpmap);
 	db_printf("pending_ipis = %x\n", pc->pc_pending_ipis);
 	db_printf("cpuid       	= %u\n", pc->pc_cpuid);
-	db_printf("kernel_sp    = %u\n", pc->pc_kernel_sp);
-	db_printf("asid_value   = %u\n", pc->pc_asid_value);
+	db_printf("kernel_sp    = %#jx\n", (uintmax_t)pc->pc_kernel_sp);
+	db_printf("asid_value   = %ju\n", (uintmax_t)pc->pc_asid_value);
 }
 
 /*

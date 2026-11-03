@@ -22,6 +22,8 @@
  * is the caller's job (ptrace PT_SETDBREGS, or the debug.la_watch sysctl).
  */
 
+#include "opt_ddb.h"
+
 #include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/systm.h>

@@ -66,75 +66,75 @@ struct op {
 	const char *name;
 	uint32_t match;
 	uint32_t mask;
-	void (*pr)(struct op *op, vm_offset_t loc, uint32_t insn);
+	void (*pr)(const struct op *op, vm_offset_t loc, uint32_t insn);
 };
-static void pr_rrr(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_rrr(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t%s, %s, %s", op->name,
 	    rname[RD(insn)], rname[RJ(insn)], rname[RK(insn)]);
 }
-static void pr_rr_i12(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_rr_i12(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t%s, %s, %d", op->name,
 	    rname[RD(insn)], rname[RJ(insn)], SI12(insn));
 }
-static void pr_rr_ui12(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_rr_ui12(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t%s, %s, %u", op->name,
 	    rname[RD(insn)], rname[RJ(insn)], UI12(insn));
 }
-static void pr_r_i20(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_r_i20(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t%s, %d", op->name, rname[RD(insn)], SI20(insn));
 }
-static void pr_r_i14s2(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_r_i14s2(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t%s, %s, %d", op->name,
 	    rname[RD(insn)], rname[RJ(insn)], SI14(insn) * 2);
 }
-static void pr_rr_i16s2(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_rr_i16s2(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t%s, %s, %d", op->name,
 	    rname[RD(insn)], rname[RJ(insn)], SI16(insn) * 2);
 }
-static void pr_r_csr(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_r_csr(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t%s, %d", op->name, rname[RD(insn)], CSR(insn));
 }
-static void pr_rr(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_rr(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t%s, %s", op->name,
 	    rname[RD(insn)], rname[RJ(insn)]);
 }
-static void pr_r(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_r(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s", op->name);
 }
-static void pr_i15(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_i15(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t%d", op->name, UI15(insn));
 }
-static void pr_brz(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_brz(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t%s, ", op->name, rname[RJ(insn)]);
 	pr_target(loc, offs21(insn));
 }
-static void pr_brr(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_brr(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t%s, %s, ", op->name,
 	    rname[RD(insn)], rname[RJ(insn)]);
 	pr_target(loc, offs16(insn));
 }
-static void pr_j(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_j(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t", op->name);
 	pr_target(loc, offs26(insn));
 }
-static void pr_hint(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_hint(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t%d", op->name, UI15(insn));
 }
-static void pr_move(struct op *op, vm_offset_t loc, uint32_t insn)
+static void pr_move(const struct op *op, vm_offset_t loc, uint32_t insn)
 {
 	db_printf("%-9s\t%s, %s", "move",
 	    rname[RD(insn)], rname[RJ(insn)]);
@@ -287,7 +287,7 @@ db_disasm(vm_offset_t loc, bool altfmt)
 			 * We show ld.b for now since it's more common. */
 			continue;
 		}
-		op->pr((struct op *)op, loc, insn);
+		op->pr(op, loc, insn);
 		return (loc + 4);
 	}
 
