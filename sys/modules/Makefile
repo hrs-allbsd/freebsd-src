@@ -257,6 +257,8 @@ SUBDIR=	\
 	${_mana} \
 	md \
 	mdio \
+	gnet \
+	yt \
 	mgb \
 	mem \
 	mfi \
