@@ -577,6 +577,11 @@ acpi_pcpu_get_id(device_t dev, uint32_t acpi_id, u_int *cpu_id)
      * UP box) use the ACPI ID from the first processor we find.
      */
     if (mp_ncpus == 1) {
+#if defined(__loongarch__)
+	/* CORE_PIC identifies the boot CPU even in a UP kernel. */
+	if (pcpu_find(0)->pc_acpi_id != 0xffffffff)
+	    return (ESRCH);
+#endif
 	pc = pcpu_find(0);
 	if (pc->pc_acpi_id == 0xffffffff)
 	    pc->pc_acpi_id = acpi_id;
@@ -610,6 +615,10 @@ acpi_cpu_madt_handler(ACPI_SUBTABLE_HEADER *entry, void *arg)
     case ACPI_MADT_TYPE_GENERIC_INTERRUPT:
 	id = ((ACPI_MADT_GENERIC_INTERRUPT *)entry)->Uid;
 	flags = ((ACPI_MADT_GENERIC_INTERRUPT *)entry)->Flags;
+	break;
+    case ACPI_MADT_TYPE_CORE_PIC:
+	id = ((ACPI_MADT_CORE_PIC *)entry)->ProcessorId;
+	flags = ((ACPI_MADT_CORE_PIC *)entry)->Flags;
 	break;
     case ACPI_MADT_TYPE_RINTC:
 	id = ((ACPI_MADT_RINTC *)entry)->Uid;

@@ -267,8 +267,14 @@ static driver_t acpi_driver = {
     sizeof(struct acpi_softc),
 };
 
+/* Full-hardware LoongArch FADTs need the PCH SCI and timer already attached. */
+#ifdef __loongarch__
+EARLY_DRIVER_MODULE(acpi, nexus, acpi_driver, acpi_modevent, 0,
+    BUS_PASS_TIMER + BUS_PASS_ORDER_LAST);
+#else
 EARLY_DRIVER_MODULE(acpi, nexus, acpi_driver, acpi_modevent, 0,
     BUS_PASS_BUS + BUS_PASS_ORDER_MIDDLE);
+#endif
 MODULE_VERSION(acpi, 1);
 
 ACPI_SERIAL_DECL(acpi, "ACPI root bus");
@@ -341,7 +347,12 @@ SYSCTL_INT(_debug_acpi, OID_AUTO, interpreter_slack, CTLFLAG_RDTUN,
     &acpi_interpreter_slack, 1, "Turn on interpreter slack mode.");
 
 /* Ignore register widths set by FADT and use default widths instead. */
+#ifdef __loongarch__
+/* Loongson FADTs describe wider PM1 event/control registers. */
+static int acpi_ignore_reg_width = 0;
+#else
 static int acpi_ignore_reg_width = 1;
+#endif
 TUNABLE_INT("debug.acpi.default_register_width", &acpi_ignore_reg_width);
 SYSCTL_INT(_debug_acpi, OID_AUTO, default_register_width, CTLFLAG_RDTUN,
     &acpi_ignore_reg_width, 1, "Ignore register widths set by FADT");
@@ -422,6 +433,8 @@ acpi_Startup(void)
      * Pre-allocate space for RSDT/XSDT and DSDT tables and allow resizing
      * if more tables exist.
      */
+    /* Apply the width policy before FADT conversion, not only at attach. */
+    AcpiGbl_UseDefaultRegisterWidths = acpi_ignore_reg_width ? TRUE : FALSE;
     if (ACPI_FAILURE(status = AcpiInitializeTables(NULL, 2, TRUE))) {
 	printf("ACPI: Table initialisation failed: %s\n",
 	    AcpiFormatException(status));

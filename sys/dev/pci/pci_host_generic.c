@@ -49,6 +49,9 @@
 
 #include <machine/bus.h>
 #include <machine/intr.h>
+#ifdef __loongarch__
+#include <machine/pci_cfgreg.h>
+#endif
 
 #include "pcib_if.h"
 
@@ -317,7 +320,14 @@ generic_pcie_read_config(device_t dev, u_int bus, u_int slot,
 	if ((sc->quirks & PCIE_ECAM_DESIGNWARE_QUIRK) && bus == 0 && slot > 0)
 		return (~0U);
 
-	offset = PCIE_ADDR_OFFSET(bus - sc->bus_start, slot, func, reg);
+#ifdef __loongarch__
+	if ((sc->quirks & PCIE_ECAM_LOONGSON_QUIRK) != 0) {
+		offset = loongson_pci_cfg_offset(bus, sc->bus_start, slot, func, reg);
+		if (offset == 0xffffffff)
+			return (~0U);
+	} else
+#endif
+		offset = PCIE_ADDR_OFFSET(bus - sc->bus_start, slot, func, reg);
 
 	switch (bytes) {
 	case 1:
@@ -350,7 +360,14 @@ generic_pcie_write_config(device_t dev, u_int bus, u_int slot,
 	    (reg > PCIE_REGMAX))
 		return;
 
-	offset = PCIE_ADDR_OFFSET(bus - sc->bus_start, slot, func, reg);
+#ifdef __loongarch__
+	if ((sc->quirks & PCIE_ECAM_LOONGSON_QUIRK) != 0) {
+		offset = loongson_pci_cfg_offset(bus, sc->bus_start, slot, func, reg);
+		if (offset == 0xffffffff)
+			return;
+	} else
+#endif
+		offset = PCIE_ADDR_OFFSET(bus - sc->bus_start, slot, func, reg);
 
 	switch (bytes) {
 	case 1:

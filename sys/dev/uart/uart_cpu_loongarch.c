@@ -20,6 +20,7 @@
 #include <vm/pmap.h>
 
 #include <machine/bus.h>
+#include <machine/machdep.h>
 
 #include <dev/uart/uart.h>
 #include <dev/uart/uart_cpu.h>
@@ -65,28 +66,6 @@ uart_cpu_getdev(int devtype, struct uart_devinfo *di)
 	}
 #endif
 
-	/*
-	 * Fallback: the 3A6000 firmware provides no SPCR/DBG2 table, so
-	 * hardcode the well-known Loongson LPC ns8250 console UART.
-	 */
-	if (devtype == UART_DEV_CONSOLE) {
-		di->ops = uart_getops(class);
-		di->bas.chan = 0;
-		di->bas.regshft = 0;
-		di->bas.regiowidth = 1;
-		di->baudrate = 0;		/* keep firmware baud rate */
-		di->bas.rclk = 0;
-		di->databits = 8;
-		di->stopbits = 1;
-		di->parity = UART_PARITY_NONE;
-		di->bas.bst = &memmap_bus;
-		/* Use the DMW0 uncached direct-map window (same as the early
-		 * console) -- pmap_mapdev at cninit time is unreliable. */
-		di->bas.bsh = (bus_space_handle_t)0x800000001fe001e0UL;
-		uart_bus_space_mem = di->bas.bst;
-		uart_bus_space_io = NULL;
-		return (0);
-	}
-
+	/* A UART's presence does not make it the firmware console. */
 	return (ENXIO);
 }

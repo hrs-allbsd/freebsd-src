@@ -86,6 +86,7 @@ struct generic_pcie_core_softc {
 };
 
 /* Quirks */
+#define PCIE_ECAM_LOONGSON_QUIRK	(1 << 2)
 #define PCIE_ECAM_DESIGNWARE_QUIRK	(1 << 0)
 /* Child will map resources to access config registers */
 #define PCIE_CUSTOM_CONFIG_SPACE_QUIRK	(1 << 1)

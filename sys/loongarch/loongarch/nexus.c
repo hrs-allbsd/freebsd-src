@@ -198,12 +198,14 @@ nexus_attach(device_t dev)
 		nexus_add_child(dev, 0, "cpuic", 0);
 		nexus_add_child(dev, 1, "eioic", 0);
 		nexus_add_child(dev, 2, "pch_pic", 0);
-		nexus_add_child(dev, 3, "pch_msi", 0);
-		nexus_add_child(dev, 4, "acpi", 0);
+		if (acpi_identify() == 0)
+			nexus_add_child(dev, 4, "acpi", 0);
 	}
 	nexus_add_child(dev, 5, "timer", 0);
-	nexus_add_child(dev, 6, "rcons", 0);
-	nexus_add_child(dev, 7, "ofwbus", 0);
+	if (loongarch_efi_acpi_rsdp() == 0) {
+		nexus_add_child(dev, 6, "rcons", 0);
+		nexus_add_child(dev, 7, "ofwbus", 0);
+	}
 
 	bus_identify_children(dev);
 	bus_attach_children(dev);

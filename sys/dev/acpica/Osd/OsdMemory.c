@@ -84,6 +84,8 @@ AcpiOsWritable (void *Pointer, ACPI_SIZE Length)
     return (TRUE);
 }
 
+#ifndef __loongarch__
+/* LoongArch supplies allocation-free fixed-register access in MD OSL. */
 ACPI_STATUS
 AcpiOsReadMemory(ACPI_PHYSICAL_ADDRESS Address, UINT64 *Value, UINT32 Width)
 {
@@ -141,3 +143,5 @@ AcpiOsWriteMemory(ACPI_PHYSICAL_ADDRESS Address, UINT64 Value, UINT32 Width)
 
     return (AE_OK);
 }
+
+#endif /* !__loongarch__ */

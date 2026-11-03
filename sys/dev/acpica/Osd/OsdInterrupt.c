@@ -106,6 +106,9 @@ AcpiOsInstallInterruptHandler(UINT32 InterruptNumber,
 {
 	struct acpi_softc *sc;
 	struct acpi_intr *ai, *ap;
+#ifdef __loongarch__
+	int mapped_irq;
+#endif
 
 	ACPI_FUNCTION_TRACE((char *)(uintptr_t)__func__);
 
@@ -146,6 +149,16 @@ AcpiOsInstallInterruptHandler(UINT32 InterruptNumber,
 		    InterruptNumber, InterruptOverride);
 		InterruptNumber = InterruptOverride;
 	}
+
+#ifdef __loongarch__
+	/* The ACPI root's SCI bypasses acpi_pcib_route_interrupt(). */
+	mapped_irq = acpi_map_intr(sc->acpi_dev, InterruptNumber, NULL);
+	if (mapped_irq < 0)
+		goto error;
+	device_printf(sc->acpi_dev, "GSI %u mapped to IRQ %d for SCI\n",
+	    InterruptNumber, mapped_irq);
+	InterruptNumber = mapped_irq;
+#endif
 
 	/* Set up the interrupt resource. */
 	bus_set_resource(sc->acpi_dev, SYS_RES_IRQ, ai->ai_rid,

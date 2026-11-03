@@ -320,6 +320,13 @@ pmap_unmapdev(void *va, vm_size_t size)
 	size = round_page(size + offset);
 
 	pmap_kremove_device((vm_offset_t)va, size);
+#ifdef PMAP_MAPDEV_EARLY_SIZE
+	/* Early mappings use a reserved bump allocator, not kernel_arena. */
+	if ((vm_offset_t)va >=
+	    VM_MAX_KERNEL_ADDRESS - PMAP_MAPDEV_EARLY_SIZE &&
+	    (vm_offset_t)va < VM_MAX_KERNEL_ADDRESS)
+		return;
+#endif
 	kva_free(va, size);
 }
 

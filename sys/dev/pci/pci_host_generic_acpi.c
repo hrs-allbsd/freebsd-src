@@ -92,6 +92,9 @@ static struct {
 	char		oem_table_id[ACPI_OEM_TABLE_ID_SIZE + 1];
 	uint32_t	quirks;
 } pci_acpi_quirks[] = {
+#ifdef __loongarch__
+	{ "LOONGS", "LOONGSON", PCIE_ECAM_LOONGSON_QUIRK },
+#endif
 	{ "MRVL  ", "CN9130  ", PCIE_ECAM_DESIGNWARE_QUIRK },
 	{ "MRVL  ", "CN913X  ", PCIE_ECAM_DESIGNWARE_QUIRK },
 	{ "MVEBU ", "ARMADA7K", PCIE_ECAM_DESIGNWARE_QUIRK },
@@ -148,6 +151,7 @@ pci_host_generic_acpi_parse_resource(ACPI_RESOURCE *res, void *arg)
 		restype = res->Data.Address16.ResourceType;
 		min = res->Data.Address16.Address.Minimum;
 		max = res->Data.Address16.Address.Maximum;
+		off = res->Data.Address16.Address.TranslationOffset;
 		break;
 	case ACPI_RESOURCE_TYPE_ADDRESS32:
 		restype = res->Data.Address32.ResourceType;
@@ -270,6 +274,12 @@ pci_host_acpi_get_ecam_resource(device_t dev)
 	rl = &ad->ad_rl;
 	start = base + (sc->base.bus_start << PCIE_BUS_SHIFT);
 	end = base + ((sc->base.bus_end + 1) << PCIE_BUS_SHIFT) - 1;
+	if ((sc->base.quirks & PCIE_ECAM_LOONGSON_QUIRK) != 0) {
+		/* CFG1 extended registers and type-1 accesses span 512 MiB. */
+		start = base;
+		end = base + 0x1fffffff;
+		device_printf(dev, "Loongson CFG1 configuration layout\n");
+	}
 	resource_list_add(rl, SYS_RES_MEMORY, 0, start, end, end - start + 1);
 	if (bootverbose)
 		device_printf(dev, "ECAM for bus %d-%d at mem %jx-%jx\n",
@@ -319,7 +329,9 @@ pci_host_generic_acpi_init(device_t dev)
 		    sc->base.coherent ? "" : " not");
 
 	/* add config space resource */
-	pci_host_acpi_get_ecam_resource(dev);
+	error = pci_host_acpi_get_ecam_resource(dev);
+	if (error != 0)
+		return (error);
 	acpi_pcib_fetch_prt(dev, &sc->ap_prt);
 
 	error = pci_host_generic_core_attach(dev);
@@ -371,6 +383,10 @@ generic_pcie_acpi_route_interrupt(device_t bus, device_t dev, int pin)
 static u_int
 generic_pcie_get_xref(device_t pci, device_t child)
 {
+#ifdef __loongarch__
+	/* IORT is an Arm table; MSI allocation may fall back to PCI INTx. */
+	return (ACPI_MSI_XREF);
+#else
 	struct generic_pcie_acpi_softc *sc;
 	uintptr_t rid;
 	u_int xref, devid;
@@ -384,11 +400,15 @@ generic_pcie_get_xref(device_t pci, device_t child)
 	if (err != 0)
 		return (ACPI_MSI_XREF);
 	return (xref);
+#endif
 }
 
 static u_int
 generic_pcie_map_id(device_t pci, device_t child, uintptr_t *id)
 {
+#ifdef __loongarch__
+	return (pcib_get_id(pci, child, PCI_ID_RID, id));
+#else
 	struct generic_pcie_acpi_softc *sc;
 	uintptr_t rid;
 	u_int xref, devid;
@@ -404,11 +424,15 @@ generic_pcie_map_id(device_t pci, device_t child, uintptr_t *id)
 	else
 		*id = rid;	/* RID not in IORT, likely FW bug, ignore */
 	return (0);
+#endif
 }
 
 static int
 generic_pcie_get_iommu(device_t pci, device_t child, uintptr_t *id)
 {
+#ifdef __loongarch__
+	return (ENXIO);
+#else
 	struct generic_pcie_acpi_softc *sc;
 	struct pci_id_ofw_iommu *iommu;
 	uint64_t iommu_xref;
@@ -430,6 +454,7 @@ generic_pcie_get_iommu(device_t pci, device_t child, uintptr_t *id)
 	}
 
 	return (err);
+#endif
 }
 
 static int
