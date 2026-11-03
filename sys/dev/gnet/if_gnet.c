@@ -149,7 +149,8 @@ link_update(device_t dev)
 	uint32_t cfg, old;
 	uint64_t speed = 0;
 	int link = LINK_STATE_DOWN;
-	if (sc->miibus == NULL)
+	/* MII polling can run before iflib has prepared the RX buffers. */
+	if (sc->miibus == NULL || !sc->running)
 		return;
 	mii = device_get_softc(sc->miibus);
 	old = rd(sc, MAC_CONFIGURATION);
