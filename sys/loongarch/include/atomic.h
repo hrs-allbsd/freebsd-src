@@ -171,12 +171,21 @@ ATOMIC_FCMPSET_ACQ_REL(16);
 #define	atomic_fcmpset_acq_short	atomic_fcmpset_acq_16
 #define	atomic_fcmpset_rel_short	atomic_fcmpset_rel_16
 
+/*
+ * LA664 can lose updates when non-barrier AMOs race with memory reads on
+ * another core.  Use the DB forms even for relaxed operations.  Stronger
+ * ordering is permitted by the atomic API and avoids that erratum without
+ * relying on firmware to enable a processor-specific workaround.
+ * Use an early-clobber destination even if the result is discarded: rd
+ * must differ from rj and rk, including when rk is the zero register.
+ */
 static __inline void
 atomic_add_32(volatile uint32_t *p, uint32_t val)
 {
+	uint32_t old;
 
-	__asm __volatile("amadd.w $zero, %1, %0"
-			: "+ZB" (*p)
+	__asm __volatile("amadd_db.w %0, %2, %1"
+			: "=&r" (old), "+ZB" (*p)
 			: "r" (val)
 			: "memory");
 }
@@ -184,9 +193,10 @@ atomic_add_32(volatile uint32_t *p, uint32_t val)
 static __inline void
 atomic_subtract_32(volatile uint32_t *p, uint32_t val)
 {
+	uint32_t old;
 
-	__asm __volatile("amadd.w $zero, %1, %0"
-			: "+ZB" (*p)
+	__asm __volatile("amadd_db.w %0, %2, %1"
+			: "=&r" (old), "+ZB" (*p)
 			: "r" (-val)
 			: "memory");
 }
@@ -194,9 +204,10 @@ atomic_subtract_32(volatile uint32_t *p, uint32_t val)
 static __inline void
 atomic_set_32(volatile uint32_t *p, uint32_t val)
 {
+	uint32_t old;
 
-	__asm __volatile("amor.w $zero, %1, %0"
-			: "+ZB" (*p)
+	__asm __volatile("amor_db.w %0, %2, %1"
+			: "=&r" (old), "+ZB" (*p)
 			: "r" (val)
 			: "memory");
 }
@@ -204,9 +215,10 @@ atomic_set_32(volatile uint32_t *p, uint32_t val)
 static __inline void
 atomic_clear_32(volatile uint32_t *p, uint32_t val)
 {
+	uint32_t old;
 
-	__asm __volatile("amand.w $zero, %1, %0"
-			: "+ZB" (*p)
+	__asm __volatile("amand_db.w %0, %2, %1"
+			: "=&r" (old), "+ZB" (*p)
 			: "r" (~val)
 			: "memory");
 }
@@ -270,7 +282,7 @@ atomic_fetchadd_32(volatile uint32_t *p, uint32_t val)
 {
 	uint32_t ret;
 
-	__asm __volatile("amadd.w %0, %2, %1"
+	__asm __volatile("amadd_db.w %0, %2, %1"
 			: "=&r" (ret), "+ZB" (*p)
 			: "r" (val)
 			: "memory");
@@ -286,12 +298,40 @@ atomic_readandclear_32(volatile uint32_t *p)
 
 	val = 0;
 
-	__asm __volatile("amswap.w %0, %2, %1"
+	__asm __volatile("amswap_db.w %0, %2, %1"
 			: "=&r"(ret), "+ZB" (*p)
 			: "r" (val)
 			: "memory");
 
 	return (ret);
+}
+
+static __inline int
+atomic_testandset_32(volatile uint32_t *p, u_int val)
+{
+	uint32_t mask, old;
+
+	mask = 1u << (val & 31);
+	__asm __volatile("amor_db.w %0, %2, %1"
+			: "=&r"(old), "+ZB" (*p)
+			: "r" (mask)
+			: "memory");
+
+	return ((old & mask) != 0);
+}
+
+static __inline int
+atomic_testandclear_32(volatile uint32_t *p, u_int val)
+{
+	uint32_t mask, old;
+
+	mask = 1u << (val & 31);
+	__asm __volatile("amand_db.w %0, %2, %1"
+			: "=&r"(old), "+ZB" (*p)
+			: "r" (~mask)
+			: "memory");
+
+	return ((old & mask) != 0);
 }
 
 #define	atomic_add_int		atomic_add_32
@@ -302,6 +342,8 @@ atomic_readandclear_32(volatile uint32_t *p)
 #define	atomic_readandclear_int	atomic_readandclear_32
 #define	atomic_set_int		atomic_set_32
 #define	atomic_subtract_int	atomic_subtract_32
+#define	atomic_testandclear_int	atomic_testandclear_32
+#define	atomic_testandset_int	atomic_testandset_32
 
 ATOMIC_ACQ_REL(set, 32)
 ATOMIC_ACQ_REL(clear, 32)
@@ -351,9 +393,10 @@ atomic_store_rel_32(volatile uint32_t *p, uint32_t val)
 static __inline void
 atomic_add_64(volatile uint64_t *p, uint64_t val)
 {
+	uint64_t old;
 
-	__asm __volatile("amadd.d $zero, %1, %0"
-			: "+ZB" (*p)
+	__asm __volatile("amadd_db.d %0, %2, %1"
+			: "=&r" (old), "+ZB" (*p)
 			: "r" (val)
 			: "memory");
 }
@@ -361,9 +404,10 @@ atomic_add_64(volatile uint64_t *p, uint64_t val)
 static __inline void
 atomic_subtract_64(volatile uint64_t *p, uint64_t val)
 {
+	uint64_t old;
 
-	__asm __volatile("amadd.d $zero, %1, %0"
-			: "+ZB" (*p)
+	__asm __volatile("amadd_db.d %0, %2, %1"
+			: "=&r" (old), "+ZB" (*p)
 			: "r" (-val)
 			: "memory");
 }
@@ -371,9 +415,10 @@ atomic_subtract_64(volatile uint64_t *p, uint64_t val)
 static __inline void
 atomic_set_64(volatile uint64_t *p, uint64_t val)
 {
+	uint64_t old;
 
-	__asm __volatile("amor.d $zero, %1, %0"
-			: "+ZB" (*p)
+	__asm __volatile("amor_db.d %0, %2, %1"
+			: "=&r" (old), "+ZB" (*p)
 			: "r" (val)
 			: "memory");
 }
@@ -381,9 +426,10 @@ atomic_set_64(volatile uint64_t *p, uint64_t val)
 static __inline void
 atomic_clear_64(volatile uint64_t *p, uint64_t val)
 {
+	uint64_t old;
 
-	__asm __volatile("amand.d $zero, %1, %0"
-			: "+ZB" (*p)
+	__asm __volatile("amand_db.d %0, %2, %1"
+			: "=&r" (old), "+ZB" (*p)
 			: "r" (~val)
 			: "memory");
 }
@@ -447,7 +493,7 @@ atomic_fetchadd_64(volatile uint64_t *p, uint64_t val)
 {
 	uint64_t ret;
 
-	__asm __volatile("amadd.d %0, %2, %1"
+	__asm __volatile("amadd_db.d %0, %2, %1"
 			: "=&r" (ret), "+ZB" (*p)
 			: "r" (val)
 			: "memory");
@@ -463,7 +509,7 @@ atomic_readandclear_64(volatile uint64_t *p)
 
 	val = 0;
 
-	__asm __volatile("amswap.d %0, %2, %1"
+	__asm __volatile("amswap_db.d %0, %2, %1"
 			: "=&r"(ret), "+ZB" (*p)
 			: "r" (val)
 			: "memory");
@@ -476,7 +522,7 @@ atomic_swap_32(volatile uint32_t *p, uint32_t val)
 {
 	uint32_t old;
 
-	__asm __volatile("amswap.w %0, %2, %1"
+	__asm __volatile("amswap_db.w %0, %2, %1"
 			: "=&r"(old), "+ZB" (*p)
 			: "r" (val)
 			: "memory");
@@ -489,7 +535,7 @@ atomic_swap_64(volatile uint64_t *p, uint64_t val)
 {
 	uint64_t old;
 
-	__asm __volatile("amswap.d %0, %2, %1"
+	__asm __volatile("amswap_db.d %0, %2, %1"
 			: "=&r"(old), "+ZB" (*p)
 			: "r" (val)
 			: "memory");
@@ -503,7 +549,7 @@ atomic_testandset_64(volatile uint64_t *p, u_int val)
 	uint64_t mask, old;
 
 	mask = 1ul << (val & 63);
-	__asm __volatile("amor.d %0, %2, %1"
+	__asm __volatile("amor_db.d %0, %2, %1"
 			: "=&r"(old), "+ZB" (*p)
 			: "r" (mask)
 			: "memory");
@@ -517,7 +563,7 @@ atomic_testandclear_64(volatile uint64_t *p, u_int val)
 	uint64_t mask, old;
 
 	mask = 1ul << (val & 63);
-	__asm __volatile("amand.d %0, %2, %1"
+	__asm __volatile("amand_db.d %0, %2, %1"
 			: "=&r"(old), "+ZB" (*p)
 			: "r" (~mask)
 			: "memory");
