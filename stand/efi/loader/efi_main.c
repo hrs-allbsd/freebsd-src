@@ -192,6 +192,8 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system_table)
 	argv[argc] = NULL;
 
 	status = main(argc, argv);
+	/* Do not leave a timer callback pointing into the unloaded image. */
+	efi_time_fini();
 	efi_exit(status);
 	return (status);
 }

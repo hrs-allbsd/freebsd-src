@@ -55,9 +55,6 @@ __elfN(exec)(struct preloaded_file *fp)
 
 	efi_time_fini();
 
-	entry = efi_translate(e->e_entry);
-
-	printf("Kernel entry at %p...\n", entry);
 	printf("Kernel args: %s\n", fp->f_args);
 
 	/*
@@ -70,6 +67,8 @@ __elfN(exec)(struct preloaded_file *fp)
 		efi_time_init();
 		return (error);
 	}
+	/* bi_load() may relocate the staging area while copying metadata. */
+	entry = efi_translate(e->e_entry);
 
 	/*
 	 * At this point we've called ExitBootServices, so we can't call

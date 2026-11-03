@@ -63,8 +63,8 @@ bool maybe_download_ramdisk(int argc, CHAR16 **argv);
 int download_md_image(const char *url);
 void maybe_download_initmd(void);
 
-#if defined(__amd64__) || defined(__i386__)
-/* Need this to setup page tables */
+#if defined(__amd64__) || defined(__i386__) || defined(__loongarch__)
+/* Physical staging address for page tables and boot diagnostics. */
 extern EFI_PHYSICAL_ADDRESS staging;
 #endif
 

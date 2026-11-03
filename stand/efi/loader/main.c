@@ -974,6 +974,9 @@ check_acpi_spcr(void)
 	spcr = acpi_find_table(ACPI_SIG_SPCR);
 	if (spcr == NULL || spcr->SerialPort.Address == 0)
 		return (0);
+	/* Console mode changes must preserve loader.conf and prompt overrides. */
+	if (getenv("hw.uart.console") != NULL)
+		return (RB_SERIAL);
 	dt = acpi_uart_type(spcr->InterfaceType);
 	if (dt == NULL)	{ 	/* Kernel can't use unknown types */
 		printf("UART Type %d not known\n", spcr->InterfaceType);

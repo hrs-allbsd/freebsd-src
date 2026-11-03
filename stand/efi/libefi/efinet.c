@@ -591,6 +591,8 @@ efinet_dev_init(void)
 	bootp_client_arch = 0x000a;	/* EFI 32-bit ARM */
 #elif defined(__riscv)
 	bootp_client_arch = 0x001b;	/* EFI 64-bit RISC-V */
+#elif defined(__loongarch__)
+	bootp_client_arch = 0x0027;	/* EFI LoongArch64 */
 #endif
 
 	sz = 0;

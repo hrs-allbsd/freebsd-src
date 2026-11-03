@@ -15,7 +15,7 @@ CFLAGS+=	-malign-double
 .endif
 .endif
 
-.if ${MACHINE_CPUARCH} == "aarch64"
+.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "loongarch"
 CFLAGS+=	-fshort-wchar
 CFLAGS+=	-fPIC
 .endif

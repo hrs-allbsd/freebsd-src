@@ -209,7 +209,7 @@ bi_load_efi_data(struct preloaded_file *kfp, bool exit_bs)
 	}
 #endif
 
-#if defined(__amd64__) || defined(__i386__)
+#if defined(__amd64__) || defined(__i386__) || defined(__loongarch__)
 	/*
 	 * Staging can't move after this point, so report the final value before
 	 * we try to exit boot services below. The metadata added is added to

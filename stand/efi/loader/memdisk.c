@@ -225,19 +225,32 @@ maybe_download_initmd(void)
 {
 #ifdef LOADER_NET_SUPPORT
 	struct devdesc dev;
+	EFI_HANDLE handle;
+	uint8_t boot_mac[6], mac[6];
 	const char *url;
-	int error;
+	int error, unit;
 
-	if (efi_find_handle(&efinet_dev, 0) == NULL)
+	/* net0 need not be the interface that loaded this image. */
+	if (boot_img == NULL || !efi_devpath_get_mac(
+	    efi_lookup_devpath(boot_img->DeviceHandle), boot_mac))
 		return;
+	for (unit = 0; ; unit++) {
+		handle = efi_find_handle(&efinet_dev, unit);
+		if (handle == NULL)
+			return;
+		if (efi_devpath_get_mac(efi_lookup_devpath(handle), mac) &&
+		    memcmp(mac, boot_mac, sizeof(mac)) == 0)
+			break;
+	}
+	printf("Checking initmd on PXE net%d\n", unit);
 
 	memset(&dev, 0, sizeof(dev));
 	dev.d_dev = &efinet_dev;
-	dev.d_unit = 0;
+	dev.d_unit = unit;
 	error = net_configure(&dev);
 	if (error != 0) {
-		printf("Could not configure net0 for initmd: %s\n",
-		    strerror(error));
+		printf("Could not configure net%d for initmd: %s\n",
+		    unit, strerror(error));
 		return;
 	}
 
