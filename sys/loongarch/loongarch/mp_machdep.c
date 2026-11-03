@@ -96,17 +96,11 @@ SYSCTL_PROC(_machdep, OID_AUTO, smp_hwtids,
     CTLTYPE_UINT | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
     sysctl_smp_hwtids, "IU", "Hardware CPU IDs in logical CPU order");
 
-static device_identify_t loongarch64_cpu_identify;
-static device_probe_t loongarch64_cpu_probe;
-static device_attach_t loongarch64_cpu_attach;
-
 static int ipi_handler(void *);
 
 extern uint32_t boot_cpu;
 extern cpuset_t all_cpus;
 extern void cpu_exception_handler(void);
-
-static device_t cpu_list[MAXCPU];
 
 void mpentry(u_long cpuid);
 void init_secondary(uint32_t);
@@ -141,77 +135,6 @@ static void la_invlop_handler(void);
 
 /* Temporary variables for init_secondary()  */
 void *dpcpu[MAXCPU - 1];
-
-static device_method_t loongarch64_cpu_methods[] = {
-	/* Device interface */
-	DEVMETHOD(device_identify,	loongarch64_cpu_identify),
-	DEVMETHOD(device_probe,		loongarch64_cpu_probe),
-	DEVMETHOD(device_attach,	loongarch64_cpu_attach),
-
-	DEVMETHOD_END
-};
-
-static driver_t loongarch64_cpu_driver = {
-	"loongarch64_cpu",
-	loongarch64_cpu_methods,
-	0
-};
-
-DRIVER_MODULE(loongarch64_cpu, cpu, loongarch64_cpu_driver, 0, 0);
-
-static void
-loongarch64_cpu_identify(driver_t *driver, device_t parent)
-{
-
-	if (device_find_child(parent, "loongarch64_cpu", -1) != NULL)
-		return;
-	if (BUS_ADD_CHILD(parent, 0, "loongarch64_cpu", -1) == NULL)
-		device_printf(parent, "add child failed\n");
-}
-
-static int
-loongarch64_cpu_probe(device_t dev)
-{
-	u_int cpuid;
-
-	cpuid = device_get_unit(dev);
-	if (cpuid >= MAXCPU || cpuid > mp_maxid)
-		return (EINVAL);
-
-	device_quiet(dev);
-	return (0);
-}
-
-static int
-loongarch64_cpu_attach(device_t dev)
-{
-	const uint32_t *reg;
-	size_t reg_size;
-	u_int cpuid;
-	int i;
-
-	cpuid = device_get_unit(dev);
-
-	if (cpuid >= MAXCPU || cpuid > mp_maxid)
-		return (EINVAL);
-	KASSERT(cpu_list[cpuid] == NULL, ("Already have cpu %u", cpuid));
-
-	reg = cpu_get_cpuid(dev, &reg_size);
-	if (reg == NULL)
-		return (EINVAL);
-
-	if (bootverbose) {
-		device_printf(dev, "register <");
-		for (i = 0; i < reg_size; i++)
-			printf("%s%x", (i == 0) ? "" : " ", reg[i]);
-		printf(">\n");
-	}
-
-	/* Set the device to start it later */
-	cpu_list[cpuid] = dev;
-
-	return (0);
-}
 
 static void
 release_aps(void *dummy __unused)
