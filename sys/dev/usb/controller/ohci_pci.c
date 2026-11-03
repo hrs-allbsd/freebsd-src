@@ -231,6 +231,19 @@ ohci_pci_attach(device_t self)
 	sc->sc_io_tag = rman_get_bustag(sc->sc_io_res);
 	sc->sc_io_hdl = rman_get_bushandle(sc->sc_io_res);
 	sc->sc_io_size = rman_get_size(sc->sc_io_res);
+	/*
+	 * LS7A revision 2 decodes legacy keyboard registers over part of the
+	 * root port register range.  Select the second 4KB register mirror.
+	 */
+	if (pci_get_devid(self) == 0x7a240014 && pci_get_revid(self) == 0x02) {
+		if (sc->sc_io_size < 0x2000 ||
+		    bus_space_subregion(sc->sc_io_tag, sc->sc_io_hdl,
+		    0x1000, 0x1000, &sc->sc_io_hdl) != 0) {
+			device_printf(self, "Could not map OHCI register mirror\n");
+			goto error;
+		}
+		sc->sc_io_size = 0x1000;
+	}
 
 	rid = 0;
 	sc->sc_irq_res = bus_alloc_resource_any(self, SYS_RES_IRQ, &rid,
