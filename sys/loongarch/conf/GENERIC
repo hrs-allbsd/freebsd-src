@@ -17,7 +17,7 @@
 # in NOTES.
 #
 
-cpu		LoongArch
+cpu		LOONGARCH
 ident		GENERIC
 
 makeoptions	DEBUG=-g		# Build kernel with gdb(1) debug symbols
@@ -62,7 +62,7 @@ options 	SYSVSEM			# SYSV-style semaphores
 options 	_KPOSIX_PRIORITY_SCHEDULING # POSIX P1003_1B real-time extensions
 options 	PRINTF_BUFR_SIZE=128	# Prevent printf output being interspersed.
 options 	KBD_INSTALL_CDEV	# install a CDEV entry in /dev
-# options 	HWPMC_HOOKS		# Necessary kernel hooks for hwpmc(4)
+options		HWPMC_HOOKS		# Performance monitoring hooks
 options 	AUDIT			# Security event auditing
 options 	CAPABILITY_MODE		# Capsicum capability mode
 options 	CAPABILITIES		# Capsicum capabilities
@@ -71,8 +71,7 @@ options 	DDB_CTF			# Kernel ELF linker loads CTF data
 options 	RACCT			# Resource accounting framework
 options 	RACCT_DEFAULT_TO_DISABLED # Set kern.racct.enable=0 by default
 options 	RCTL			# Resource limits
-options 	SMP
-
+options		SMP			# Symmetric MultiProcessor Kernel
 
 options		FDT
 
@@ -80,7 +79,6 @@ options		FDT
 device		clk
 device		hwreset
 device		syscon
-#device		syscon_power	# disabled: crashes during panic due to TLB invalidation race
 device		loongarch_syscon
 
 # Bus drivers
@@ -140,14 +138,7 @@ device		kbdmux
 # Power management controllers
 # device		da9063_pmic	# Dialog Semiconductor DA9063 PMIC
 
-# Uncomment for memory disk
-# options 	MD_ROOT
-# options 	MD_ROOT_SIZE=32768	# 32MB ram disk
-# makeoptions	MFS_IMAGE=/path/to/img
-# options 	ROOTDEVNAME=\"ufs:/dev/md0\"
-
-# Uncomment for virtio block device
-# options 	ROOTDEVNAME=\"ufs:/dev/vtbd0\"
+# Memory disk boot options
 
 # Debugging support.  Always need this:
 options 	KDB			# Enable kernel debugger support.
@@ -171,3 +162,173 @@ device		firmware	# firmware assist module
 # Note that 'bpf' is required for DHCP.
 device		bpf		# Berkeley packet filter
 
+# Additional generic facilities.
+options		NUMA
+options		EXTERR_STRINGS
+options		IPSEC_OFFLOAD
+options		FIB_ALGO
+options		KERN_TLS
+options		MD_ROOT
+options		COMPAT_FREEBSD14
+options		COMPAT_FREEBSD15
+# DTrace requires a LoongArch implementation in sys/cddl/dev/dtrace.
+options		INCLUDE_CONFIG_FILE
+options		GZIO
+options		EKCD
+options		DEBUGNET
+options		NETDUMP
+options		NETGDB
+options		PCI_HP
+options		PCI_IOV
+options		COMPAT_LINUXKPI
+options		PPS_SYNC
+options		IEEE80211_DEBUG
+options		IEEE80211_SUPPORT_MESH
+options		AH_AR5416_INTERRUPT_MITIGATION
+options		RANDOM_ENABLE_TPM
+options		RANDOM_ENABLE_KBD
+options		RANDOM_ENABLE_MOUSE
+options		EVDEV_SUPPORT
+options		IICHID_SAMPLING
+options		ZFS
+
+include "std.debug"
+
+# Platform management and disk controllers
+device		acpi
+device		smbios
+device		cpufreq
+device		ahci
+device		ata
+device		mvs
+device		siis
+device		ahc
+device		ahd
+device		hptiop
+device		isp
+device		mpt
+device		mps
+device		mpr
+device		mpi3mr
+device		sym
+device		isci
+device		ocs_fc
+device		pvscsi
+device		arcmsr
+device		ciss
+device		ips
+device		smartpqi
+device		tws
+device		aac
+device		aacp
+device		aacraid
+device		ida
+device		mfi
+device		mlx
+device		mrsas
+
+# ATA/SCSI peripherals
+device		ada
+device		nda
+device		ch
+device		sa
+device		cd
+device		ses
+
+# MDIO, iflib and physical Ethernet
+device		mdio
+device		iflib
+device		em
+device		igc
+device		ix
+device		ixv
+device		ixl
+device		iavf
+device		ice
+device		vmx
+device		axp
+device		aq
+device		bxe
+device		rge
+device		ti
+device		mlx5
+device		mlxfw
+device		mlx5en
+device		miibus
+device		ae
+device		age
+device		alc
+device		ale
+device		bce
+device		bfe
+device		bge
+device		cas
+device		dc
+device		et
+device		fxp
+device		gem
+device		jme
+device		lge
+device		msk
+device		nfe
+device		nge
+device		re
+device		rl
+device		sge
+device		sis
+device		sk
+device		ste
+device		stge
+device		vge
+device		vr
+device		xl
+device		gnet
+device		yt
+
+# Wireless networking
+device		wlan
+device		wlan_wep
+device		wlan_tkip
+device		wlan_ccmp
+device		wlan_gcmp
+device		wlan_amrr
+device		ath
+device		ath_hal
+device		ath_rate_sample
+device		ipw
+device		iwi
+device		iwn
+device		malo
+device		mwl
+device		ral
+device		wpi
+
+# USB and HID
+device		uhci
+device		usbhid
+device		hkbd
+device		hidbus
+
+# Audio
+device		sound
+device		snd_cmi
+device		snd_csa
+device		snd_emu10kx
+device		snd_es137x
+device		snd_hda
+device		snd_ich
+device		snd_via8233
+
+# MMC/SD
+device		mmc
+device		mmcsd
+device		sdhci
+
+# Other portable generic facilities
+device		cryptodev
+device		virtio_balloon
+device		netmap
+device		evdev
+device		uinput
+device		tpm
+device		xz

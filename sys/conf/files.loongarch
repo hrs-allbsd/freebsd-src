@@ -69,3 +69,216 @@ dev/acpica/acpi_pci_link.c		optional acpi pci
 
 # Zstd
 contrib/zstd/lib/freebsd/zstd_kfreebsd.c		optional zstdio compile-with ${ZSTD_C}
+
+
+loongarch/acpica/OsdEnvironment.c	optional acpi
+loongarch/acpica/acpi_machdep.c	optional acpi
+loongarch/acpica/acpi_wakeup.c	optional acpi
+loongarch/acpica/pci_cfgreg.c	optional acpi pci
+loongarch/acpica/loongarch_osl_memory.c	optional acpi
+
+# Additional PCI drivers selected by GENERIC.
+dev/axgbe/if_axgbe_pci.c	optional	axp
+dev/axgbe/xgbe-desc.c		optional	axp
+dev/axgbe/xgbe-dev.c		optional	axp
+dev/axgbe/xgbe-drv.c		optional	axp
+dev/axgbe/xgbe-mdio.c		optional	axp
+dev/axgbe/xgbe-sysctl.c		optional	axp
+dev/axgbe/xgbe-txrx.c		optional	axp
+dev/axgbe/xgbe_osdep.c		optional	axp
+dev/axgbe/xgbe-i2c.c		optional	axp
+dev/axgbe/xgbe-phy-v2.c		optional	axp
+dev/iavf/if_iavf_iflib.c	optional	iavf pci \
+	compile-with "${NORMAL_C} -I$S/dev/iavf"
+dev/iavf/iavf_lib.c		optional	iavf pci \
+	compile-with "${NORMAL_C} -I$S/dev/iavf"
+dev/iavf/iavf_osdep.c		optional	iavf pci \
+	compile-with "${NORMAL_C} -I$S/dev/iavf"
+dev/iavf/iavf_txrx_iflib.c	optional	iavf pci \
+	compile-with "${NORMAL_C} -I$S/dev/iavf"
+dev/iavf/iavf_common.c		optional	iavf pci \
+	compile-with "${NORMAL_C} -I$S/dev/iavf"
+dev/iavf/iavf_adminq.c		optional	iavf pci \
+	compile-with "${NORMAL_C} -I$S/dev/iavf"
+dev/iavf/iavf_vc_common.c	optional	iavf pci \
+	compile-with "${NORMAL_C} -I$S/dev/iavf"
+dev/iavf/iavf_vc_iflib.c	optional	iavf pci \
+	compile-with "${NORMAL_C} -I$S/dev/iavf"
+dev/ixl/if_ixl.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/ixl_pf_main.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/ixl_pf_iflib.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/ixl_pf_qmgr.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/ixl_pf_iov.c		optional	ixl pci  pci_iov \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/ixl_pf_i2c.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/ixl_txrx.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/i40e_osdep.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/i40e_lan_hmc.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/i40e_hmc.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/i40e_common.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/i40e_nvm.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/i40e_adminq.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/ixl/i40e_dcb.c		optional	ixl pci \
+	compile-with "${NORMAL_C} -I$S/dev/ixl"
+dev/smartpqi/smartpqi_cam.c     optional 	smartpqi
+dev/smartpqi/smartpqi_cmd.c     optional 	smartpqi
+dev/smartpqi/smartpqi_discovery.c	optional	smartpqi
+dev/smartpqi/smartpqi_event.c   optional 	smartpqi
+dev/smartpqi/smartpqi_features.c   optional 	smartpqi
+dev/smartpqi/smartpqi_helper.c  optional 	smartpqi
+dev/smartpqi/smartpqi_init.c    optional 	smartpqi
+dev/smartpqi/smartpqi_intr.c    optional 	smartpqi
+dev/smartpqi/smartpqi_ioctl.c   optional 	smartpqi
+dev/smartpqi/smartpqi_main.c    optional 	smartpqi
+dev/smartpqi/smartpqi_mem.c     optional 	smartpqi
+dev/smartpqi/smartpqi_misc.c    optional 	smartpqi
+dev/smartpqi/smartpqi_queue.c   optional 	smartpqi
+dev/smartpqi/smartpqi_request.c optional 	smartpqi
+dev/smartpqi/smartpqi_response.c	optional 	smartpqi
+dev/smartpqi/smartpqi_sis.c     optional 	smartpqi
+dev/smartpqi/smartpqi_tag.c     optional 	smartpqi
+dev/arcmsr/arcmsr.c		optional	arcmsr pci
+dev/bxe/bxe.c                   optional	bxe pci
+dev/bxe/bxe_stats.c             optional	bxe pci
+dev/bxe/bxe_debug.c             optional	bxe pci
+dev/bxe/ecore_sp.c              optional	bxe pci
+dev/bxe/bxe_elink.c             optional	bxe pci
+dev/bxe/57710_init_values.c     optional	bxe pci
+dev/bxe/57711_init_values.c     optional	bxe pci
+dev/bxe/57712_init_values.c     optional	bxe pci
+dev/isci/isci.c							optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/isci_controller.c					optional isci
+dev/isci/isci_domain.c						optional isci
+dev/isci/isci_interrupt.c					optional isci
+dev/isci/isci_io_request.c					optional isci
+dev/isci/isci_logger.c						optional isci
+dev/isci/isci_oem_parameters.c					optional isci
+dev/isci/isci_remote_device.c					optional isci
+dev/isci/isci_sysctl.c						optional isci
+dev/isci/isci_task_request.c					optional isci
+dev/isci/isci_timer.c						optional isci
+dev/isci/scil/sati.c						optional isci
+dev/isci/scil/sati_abort_task_set.c				optional isci
+dev/isci/scil/sati_atapi.c					optional isci
+dev/isci/scil/sati_device.c					optional isci
+dev/isci/scil/sati_inquiry.c					optional isci
+dev/isci/scil/sati_log_sense.c					optional isci
+dev/isci/scil/sati_lun_reset.c					optional isci
+dev/isci/scil/sati_mode_pages.c					optional isci
+dev/isci/scil/sati_mode_select.c				optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/scil/sati_mode_sense.c					optional isci
+dev/isci/scil/sati_mode_sense_10.c				optional isci
+dev/isci/scil/sati_mode_sense_6.c				optional isci
+dev/isci/scil/sati_move.c					optional isci
+dev/isci/scil/sati_passthrough.c				optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/scil/sati_read.c					optional isci
+dev/isci/scil/sati_read_buffer.c				optional isci
+dev/isci/scil/sati_read_capacity.c				optional isci
+dev/isci/scil/sati_reassign_blocks.c				optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/scil/sati_report_luns.c				optional isci
+dev/isci/scil/sati_request_sense.c				optional isci
+dev/isci/scil/sati_start_stop_unit.c				optional isci
+dev/isci/scil/sati_synchronize_cache.c				optional isci
+dev/isci/scil/sati_test_unit_ready.c				optional isci
+dev/isci/scil/sati_unmap.c					optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/scil/sati_util.c					optional isci
+dev/isci/scil/sati_verify.c					optional isci
+dev/isci/scil/sati_write.c					optional isci
+dev/isci/scil/sati_write_and_verify.c				optional isci
+dev/isci/scil/sati_write_buffer.c				optional isci
+dev/isci/scil/sati_write_long.c					optional isci
+dev/isci/scil/sci_abstract_list.c				optional isci
+dev/isci/scil/sci_base_controller.c				optional isci
+dev/isci/scil/sci_base_domain.c					optional isci
+dev/isci/scil/sci_base_iterator.c				optional isci
+dev/isci/scil/sci_base_library.c				optional isci
+dev/isci/scil/sci_base_logger.c					optional isci
+dev/isci/scil/sci_base_memory_descriptor_list.c			optional isci
+dev/isci/scil/sci_base_memory_descriptor_list_decorator.c	optional isci
+dev/isci/scil/sci_base_object.c					optional isci
+dev/isci/scil/sci_base_observer.c				optional isci
+dev/isci/scil/sci_base_phy.c					optional isci
+dev/isci/scil/sci_base_port.c					optional isci
+dev/isci/scil/sci_base_remote_device.c				optional isci
+dev/isci/scil/sci_base_request.c				optional isci
+dev/isci/scil/sci_base_state_machine.c				optional isci
+dev/isci/scil/sci_base_state_machine_logger.c			optional isci
+dev/isci/scil/sci_base_state_machine_observer.c			optional isci
+dev/isci/scil/sci_base_subject.c				optional isci
+dev/isci/scil/sci_util.c					optional isci
+dev/isci/scil/scic_sds_controller.c				optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/scil/scic_sds_library.c				optional isci
+dev/isci/scil/scic_sds_pci.c					optional isci
+dev/isci/scil/scic_sds_phy.c					optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/scil/scic_sds_port.c					optional isci
+dev/isci/scil/scic_sds_port_configuration_agent.c		optional isci
+dev/isci/scil/scic_sds_remote_device.c				optional isci
+dev/isci/scil/scic_sds_remote_node_context.c			optional isci
+dev/isci/scil/scic_sds_remote_node_table.c			optional isci
+dev/isci/scil/scic_sds_request.c				optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/scil/scic_sds_sgpio.c					optional isci
+dev/isci/scil/scic_sds_smp_remote_device.c			optional isci
+dev/isci/scil/scic_sds_smp_request.c				optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/scil/scic_sds_ssp_request.c				optional isci
+dev/isci/scil/scic_sds_stp_packet_request.c			optional isci
+dev/isci/scil/scic_sds_stp_remote_device.c			optional isci
+dev/isci/scil/scic_sds_stp_request.c				optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/scil/scic_sds_unsolicited_frame_control.c		optional isci
+dev/isci/scil/scif_sas_controller.c				optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/scil/scif_sas_controller_state_handlers.c		optional isci
+dev/isci/scil/scif_sas_controller_states.c			optional isci
+dev/isci/scil/scif_sas_domain.c					optional isci
+dev/isci/scil/scif_sas_domain_state_handlers.c			optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/scil/scif_sas_domain_states.c				optional isci
+dev/isci/scil/scif_sas_high_priority_request_queue.c		optional isci
+dev/isci/scil/scif_sas_internal_io_request.c			optional isci
+dev/isci/scil/scif_sas_io_request.c				optional isci
+dev/isci/scil/scif_sas_io_request_state_handlers.c		optional isci
+dev/isci/scil/scif_sas_io_request_states.c			optional isci
+dev/isci/scil/scif_sas_library.c				optional isci
+dev/isci/scil/scif_sas_remote_device.c				optional isci
+dev/isci/scil/scif_sas_remote_device_ready_substate_handlers.c	optional isci
+dev/isci/scil/scif_sas_remote_device_ready_substates.c		optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/scil/scif_sas_remote_device_starting_substate_handlers.c		optional isci
+dev/isci/scil/scif_sas_remote_device_starting_substates.c	optional isci
+dev/isci/scil/scif_sas_remote_device_state_handlers.c		optional isci
+dev/isci/scil/scif_sas_remote_device_states.c			optional isci
+dev/isci/scil/scif_sas_request.c				optional isci
+dev/isci/scil/scif_sas_smp_activity_clear_affiliation.c		optional isci
+dev/isci/scil/scif_sas_smp_io_request.c				optional isci
+dev/isci/scil/scif_sas_smp_phy.c				optional isci
+dev/isci/scil/scif_sas_smp_remote_device.c			optional isci \
+	compile-with "${NORMAL_C} ${NO_WUNUSED_BUT_SET_VARIABLE}"
+dev/isci/scil/scif_sas_stp_io_request.c				optional isci
+dev/isci/scil/scif_sas_stp_remote_device.c			optional isci
+dev/isci/scil/scif_sas_stp_task_request.c			optional isci
+dev/isci/scil/scif_sas_task_request.c				optional isci
+dev/isci/scil/scif_sas_task_request_state_handlers.c		optional isci
+dev/isci/scil/scif_sas_task_request_states.c			optional isci
+dev/isci/scil/scif_sas_timer.c					optional isci
+dev/nfe/if_nfe.c		optional	nfe pci

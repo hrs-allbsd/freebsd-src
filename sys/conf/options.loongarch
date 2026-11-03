@@ -1,3 +1,5 @@
 
-LoongArch			opt_global.h	# For cpu LoongArch to work
+LOONGARCH			opt_global.h	# For cpu LOONGARCH to work
 INTRNG				opt_global.h
+IXL_IW				opt_ixl.h
+ISCI_LOGGING			opt_isci.h
