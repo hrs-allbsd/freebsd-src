@@ -365,6 +365,7 @@ static void _pmap_unwire_ptp(pmap_t pmap, vm_offset_t va, vm_page_t m,
 static int pmap_unuse_pt(pmap_t, vm_offset_t, pd_entry_t, struct spglist *);
 
 static int pmap_change_attr_locked(void *va, vm_size_t size, int mode);
+static inline pt_entry_t pmap_memattr_bits(vm_memattr_t mode);
 
 static pd_entry_t invalid_pgd_table; /* fwd decl: defined and set below */
 
@@ -3624,7 +3625,8 @@ pmap_enter(pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	pa = VM_PAGE_TO_PHYS(m);
 	pn = pa >> PAGE_PFN_SHIFT;
 
-	new_l3 = PTE_V | PTE_P | PTE_CC | PTE_NX | PTE_K;
+	new_l3 = PTE_V | PTE_P | PTE_NX | PTE_K |
+	    pmap_memattr_bits(pmap_page_get_memattr(m));
 	if (prot & VM_PROT_EXECUTE)
 		new_l3 &= ~PTE_NX;
 	if (flags & VM_PROT_WRITE)
@@ -4253,7 +4255,8 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 	pmap_resident_count_inc(pmap, 1);
 
 	newl3 = ((VM_PAGE_TO_PHYS(m) / PAGE_SIZE) << L3_SHIFT) |
-	    PTE_V | PTE_CC | PTE_P | PTE_NX;
+	    PTE_V | PTE_P | PTE_NX |
+	    pmap_memattr_bits(pmap_page_get_memattr(m));
 	if ((prot & VM_PROT_EXECUTE) != 0)
 		newl3 &= ~PTE_NX;
 	if ((m->oflags & VPO_UNMANAGED) == 0)
