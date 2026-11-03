@@ -35,6 +35,9 @@
 #ifndef _HDAA_QUIRKS_H_
 #define _HDAA_QUIRKS_H_
 
+/* Configuration strings address pins 0 through 7; state masks are 32-bit. */
+#define HDAA_GPIO_MAX		8
+#define HDAA_GPI_MAX		32
 #define HDAA_GPIO_SHIFT(n)	(n * 3)
 #define HDAA_GPIO_MASK(n)	(0x7 << (n * 3))
 #define HDAA_GPIO_KEEP(n)	(0x0 << (n * 3))

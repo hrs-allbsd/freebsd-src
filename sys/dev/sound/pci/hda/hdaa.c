@@ -102,6 +102,16 @@ static const char *HDA_LOCS[64] = {
 static const char *HDA_GPIO_ACTIONS[8] = {
     "keep", "set", "clear", "disable", "input", "0x05", "0x06", "0x07"};
 
+static bool
+hdaa_gpio_cap_valid(uint32_t cap)
+{
+
+	return (cap != HDA_INVALID &&
+	    HDA_PARAM_GPIO_COUNT_NUM_GPIO(cap) <= HDAA_GPIO_MAX &&
+	    HDA_PARAM_GPIO_COUNT_NUM_GPO(cap) <= HDAA_GPIO_MAX &&
+	    HDA_PARAM_GPIO_COUNT_NUM_GPI(cap) <= HDAA_GPI_MAX);
+}
+
 static const char *HDA_HDMI_CODING_TYPES[18] = {
     "undefined", "LPCM", "AC-3", "MPEG1", "MP3", "MPEG2", "AAC-LC", "DTS",
     "ATRAC", "DSD", "E-AC-3", "DTS-HD", "MLP", "DST", "WMAPro", "HE-AAC",
@@ -950,7 +960,7 @@ hdaa_gpio_patch(uint32_t gpio, const char *str)
 		if (value == NULL)
 			break;
 		ikey = strtol(key, NULL, 10);
-		if (ikey < 0 || ikey > 7)
+		if (ikey < 0 || ikey >= HDAA_GPIO_MAX)
 			continue;
 		for (i = 0; i < 7; i++) {
 			if (strcasecmp(HDA_GPIO_ACTIONS[i], value) == 0) {
@@ -2886,9 +2896,9 @@ hdaa_dump_gpi(struct hdaa_devinfo *devinfo)
 		    HDA_CMD_GET_GPI_STICKY_MASK(0, devinfo->nid));
 		for (i = 0; i < HDA_PARAM_GPIO_COUNT_NUM_GPI(devinfo->gpio_cap); i++) {
 			device_printf(dev, " GPI%d:%s%s%s state=%d", i,
-				    (sticky & (1 << i)) ? " sticky" : "",
-				    (unsol & (1 << i)) ? " unsol" : "",
-				    (wake & (1 << i)) ? " wake" : "",
+				    (sticky & (1U << i)) ? " sticky" : "",
+				    (unsol & (1U << i)) ? " unsol" : "",
+				    (wake & (1U << i)) ? " wake" : "",
 				    (data >> i) & 1);
 		}
 	}
@@ -2961,6 +2971,11 @@ hdaa_audio_parse(struct hdaa_devinfo *devinfo)
 
 	res = hda_command(devinfo->dev,
 	    HDA_CMD_GET_PARAMETER(0, nid, HDA_PARAM_GPIO_COUNT));
+	if (!hdaa_gpio_cap_valid(res)) {
+		device_printf(devinfo->dev,
+		    "Invalid GPIO capabilities 0x%08x; ignoring GPIOs\n", res);
+		res = 0;
+	}
 	devinfo->gpio_cap = res;
 
 	HDA_BOOTVERBOSE(
@@ -6379,6 +6394,9 @@ hdaa_sysctl_gpi_state(SYSCTL_HANDLER_ARGS)
 	int n = 0, i, numgpi;
 	uint32_t data = 0;
 
+	/* Bound both the bitmap shifts and the fixed-size string below. */
+	if (!hdaa_gpio_cap_valid(devinfo->gpio_cap))
+		return (EIO);
 	buf[0] = 0;
 	hdaa_lock(devinfo);
 	numgpi = HDA_PARAM_GPIO_COUNT_NUM_GPI(devinfo->gpio_cap);
@@ -6403,6 +6421,9 @@ hdaa_sysctl_gpio_state(SYSCTL_HANDLER_ARGS)
 	int n = 0, i, numgpio;
 	uint32_t data = 0, enable = 0, dir = 0;
 
+	/* Bound both the bitmap shifts and the fixed-size string below. */
+	if (!hdaa_gpio_cap_valid(devinfo->gpio_cap))
+		return (EIO);
 	buf[0] = 0;
 	hdaa_lock(devinfo);
 	numgpio = HDA_PARAM_GPIO_COUNT_NUM_GPIO(devinfo->gpio_cap);
@@ -6438,6 +6459,9 @@ hdaa_sysctl_gpio_config(SYSCTL_HANDLER_ARGS)
 
 	gpio = devinfo->newgpio;
 	numgpio = HDA_PARAM_GPIO_COUNT_NUM_GPIO(devinfo->gpio_cap);
+	/* Bound both the bitmap shifts and the fixed-size string below. */
+	if (!hdaa_gpio_cap_valid(devinfo->gpio_cap))
+		return (EIO);
 	buf[0] = 0;
 	for (i = 0; i < numgpio; i++) {
 		x = (gpio & HDAA_GPIO_MASK(i)) >> HDAA_GPIO_SHIFT(i);
@@ -6467,6 +6491,9 @@ hdaa_sysctl_gpo_state(SYSCTL_HANDLER_ARGS)
 	int n = 0, i, numgpo;
 	uint32_t data = 0;
 
+	/* Bound both the bitmap shifts and the fixed-size string below. */
+	if (!hdaa_gpio_cap_valid(devinfo->gpio_cap))
+		return (EIO);
 	buf[0] = 0;
 	hdaa_lock(devinfo);
 	numgpo = HDA_PARAM_GPIO_COUNT_NUM_GPO(devinfo->gpio_cap);
@@ -6492,6 +6519,9 @@ hdaa_sysctl_gpo_config(SYSCTL_HANDLER_ARGS)
 
 	gpo = devinfo->newgpo;
 	numgpo = HDA_PARAM_GPIO_COUNT_NUM_GPO(devinfo->gpio_cap);
+	/* Bound both the bitmap shifts and the fixed-size string below. */
+	if (!hdaa_gpio_cap_valid(devinfo->gpio_cap))
+		return (EIO);
 	buf[0] = 0;
 	for (i = 0; i < numgpo; i++) {
 		x = (gpo & HDAA_GPIO_MASK(i)) >> HDAA_GPIO_SHIFT(i);
