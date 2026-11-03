@@ -323,9 +323,45 @@ create_pagetables_to_l2:
 	jr		$ra
 
 
+	/*
+	 * Handle Huge directory operands without executing LDDIR on them.
+	 * Preserve an existing level tag; otherwise add this walk's level.
+	 * Ordinary directory loads still use LDDIR, and LDPTE splits Huge leaves.
+	 */
+	.macro refill_soft_directory level
+	andi	$t1, $t0, PTE_HUGE
+	beqz	$t1, 991f
+	srli.d	$t1, $t0, 13
+	andi	$t1, $t1, 3
+	bnez	$t1, 992f
+	li.w	$t1, (\level << 13)
+	or	$t0, $t0, $t1
+	b	992f
+991:
+	lddir	$t0, $t0, \level
+992:
+	.endm
+
 	.align 12
 handle_tlbrefill:
 	csrwr	$t0, LOONGARCH_CSR_TLBRSAVE
+	/* KS0..KS4 may still belong to an interrupted normal exception. */
+	csrrd	$t0, LOONGARCH_CSR_PRCFG1
+	andi	$t0, $t0, CSR_CONF1_KSNUM
+	sltui	$t0, $t0, 6
+	bnez	$t0, .Lrefill_legacy_walk
+	csrwr	$t1, LOONGARCH_CSR_KS5
+	csrrd	$t0, LOONGARCH_CSR_PGD
+	refill_soft_directory 3
+	refill_soft_directory 2
+	refill_soft_directory 1
+	ldpte	$t0, 0
+	ldpte	$t0, 1
+	tlbfill
+	csrrd	$t1, LOONGARCH_CSR_KS5
+	csrrd	$t0, LOONGARCH_CSR_TLBRSAVE
+	ertn
+.Lrefill_legacy_walk:
 	csrrd	$t0, LOONGARCH_CSR_PGD
 	lddir	$t0, $t0, 3
 	lddir	$t0, $t0, 2
@@ -388,8 +424,10 @@ pagetable_dmap:
         .align 3
 Lvirtdone:
 	.quad	virtdone
+#ifdef SMP
 LSvirtdone:
 	.quad	svirtdone
+#endif
 
 Lbss:
 	.quad	__bss_start
@@ -411,7 +449,7 @@ dmap_pt_va:
 ENTRY(mpentry)
 1:
 	idle 	0
-	j	1b
+	b	1b
 END(mpentry)
 #else
 /*
@@ -500,6 +538,7 @@ svirtdone:
 	/* Wait the kernel to be ready */
 	ld.w	$t1, $t0, 0
 	beqz	$t1, $1b
+	dbar	0x14		/* acquire the BSP's boot data */
 
 	/* Setup stack pointer */
 	la.pcrel	$t0, bootstack

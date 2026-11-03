@@ -239,6 +239,8 @@
 #define	LOONGARCH_CSR_KS2	0x32
 #define	LOONGARCH_CSR_KS3	0x33
 #define	LOONGARCH_CSR_KS4	0x34
+/* The refill handler preserves its scratch register in KS5. */
+#define	LOONGARCH_CSR_KS5	0x35
 
 /* Exception allocated KS0, KS1, KS2, and KS3 statically */
 #define	EXCEPTION_KS0		LOONGARCH_CSR_KS0
