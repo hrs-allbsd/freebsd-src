@@ -90,12 +90,9 @@ eioic_init_router(int vec_count)
 	 */
 
 	/*
-	 * Node map: route EVERY group to Node-0 (bit 0 in the low half).
-	 * A per-group pattern spreads groups across nodes (group i -> node
-	 * 2i) for multi-node load balancing; on a single node BSP that drops
-	 * every group except 0 -- only vector 22 (group 0) ever fired.
-	 * Empirically group 0's value (0x00020001) delivers to the BSP, so
-	 * replicate it for all groups.
+	 * Keep the node-0/node-1 selector pair used by the validated UP
+	 * configuration. All vector ROUTE entries below select node 0,
+	 * core 0; routing to other nodes is outside this bring-up target.
 	 */
 	for (i = 0; i < ngroups; i++)
 		iocsr_write32(0x00020001,

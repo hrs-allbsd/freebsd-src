@@ -177,6 +177,15 @@ pch_pic_bit_clr(struct pch_pic_softc *sc, int offset, int bit)
 }
 
 static void
+pch_pic_ack(struct pch_pic_softc *sc, u_int irq)
+{
+
+	/* INTCLR is write-only; a read-modify-write has undefined read data. */
+	pch_pic_write(sc, PCH_PIC_CLR + (irq / PIC_COUNT_PER_REG) * 4,
+	    1U << (irq % PIC_COUNT_PER_REG));
+}
+
+static void
 pch_pic_reset(struct pch_pic_softc *sc)
 {
 	int i;
@@ -190,15 +199,8 @@ pch_pic_reset(struct pch_pic_softc *sc)
 	}
 
 	for (i = 0; i < 2; i++) {
-		/*
-		 * Clear all MASK bits (0 = enabled).  The MASK register
-		 * gates interrupt forwarding; since the ISRC returned by
-		 * pic_map_intr is owned by EIOINTC, PIC_ENABLE_INTR goes
-		 * to EIOINTC and never reaches PCH-PIC to clear MASK.
-		 * We unmask everything at init and rely on EIOINTC's
-		 * per-vector enable/disable for interrupt control.
-		 */
-		pch_pic_write(sc, PCH_PIC_MASK + 4 * i, 0);
+		/* Unmask only inputs with an installed interrupt handler. */
+		pch_pic_write(sc, PCH_PIC_MASK + 4 * i, 0xffffffff);
 		pch_pic_write(sc, PCH_PIC_CLR + 4 * i, 0xFFFFFFFF);
 		/*
 		 * Distribution mode = fixed (7A1000 manual §5.4: AUTO_CTRL
@@ -434,7 +436,7 @@ pch_pic_enable_intr(device_t dev, struct intr_irqsrc *isrc)
 
 	mtx_lock_spin(&sc->mtx);
 	/* Ack/re-arm + unmask so the source can fire. */
-	pch_pic_bit_set(sc, PCH_PIC_CLR, irq);
+	pch_pic_ack(sc, irq);
 	pch_pic_bit_clr(sc, PCH_PIC_MASK, irq);
 	mtx_unlock_spin(&sc->mtx);
 }
@@ -473,13 +475,12 @@ pch_pic_setup_intr(device_t dev, struct intr_irqsrc *isrc,
 	switch (data->type) {
 #ifdef DEV_ACPI
 	case INTR_MAP_DATA_ACPI:
-		/*
-		 * LS7A PCH-PIC INTx: level-triggered, active-low.
-		 * Per-source only -- the global reset leaves unused inputs
-		 * at the default level/high so floating lines don't fire.
-		 */
-		edge = true;
-		pol_low = true;
+		/* Honor the ACPI GSI trigger and polarity for this input. */
+		{
+			struct intr_map_data_acpi *daa = (void *)data;
+			edge = daa->trig == INTR_TRIGGER_EDGE;
+			pol_low = daa->pol == INTR_POLARITY_LOW;
+		}
 		break;
 #endif
 	case INTR_MAP_DATA_FDT: {
@@ -554,7 +555,7 @@ pch_pic_pre_ithread(device_t dev, struct intr_irqsrc *isrc)
 	pisrc->storm_throttled = (pisrc->storm_refire >= PCH_PIC_STORM_LIMIT);
 	/* Ack/re-arm (CLR) while masked. */
 	pch_pic_bit_set(sc, PCH_PIC_MASK, pisrc->irq);
-	pch_pic_bit_set(sc, PCH_PIC_CLR, pisrc->irq);
+	pch_pic_ack(sc, pisrc->irq);
 	mtx_unlock_spin(&sc->mtx);
 }
 

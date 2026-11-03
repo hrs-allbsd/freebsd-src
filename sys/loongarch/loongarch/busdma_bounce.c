@@ -593,14 +593,12 @@ bounce_bus_dmamap_load_phys(bus_dma_tag_t dmat, bus_dmamap_t map,
 		segs = dmat->segments;
 
 	/*
-	 * Tolerate reload-without-unload: many drivers reload a dmamap
-	 * without bus_dmamap_unload() (amd64's IOMMU tolerates this, so the
-	 * bug is widespread).  On this bounce layer sync_count only resets on
-	 * unload, so a bare reload would accumulate and fail with EFBIG.
-	 * Match amd64 tolerance by unloading first.
+	 * Tolerate a reload only at the start of a new mapping.  Later
+	 * chunks of an mbuf chain, unmapped mbuf or uio must retain the
+	 * bounce pages and sync entries accumulated by earlier chunks.
 	 */
-	if (__predict_false(!STAILQ_EMPTY(&map->bpages) ||
-	    map->sync_count != 0))
+	if (__predict_false(*segp == -1 &&
+	    (!STAILQ_EMPTY(&map->bpages) || map->sync_count != 0)))
 		bounce_bus_dmamap_unload(dmat, map);
 
 	if ((dmat->bounce_flags & BF_COULD_BOUNCE) != 0) {
@@ -675,11 +673,9 @@ bounce_bus_dmamap_load_buffer(bus_dma_tag_t dmat, bus_dmamap_t map, void *buf,
 	if (segs == NULL)
 		segs = dmat->segments;
 
-	/*
-	 * Tolerate reload-without-unload (see bounce_bus_dmamap_load_phys).
-	 */
-	if (__predict_false(!STAILQ_EMPTY(&map->bpages) ||
-	    map->sync_count != 0))
+	/* Keep earlier chunks of the same mapping intact. */
+	if (__predict_false(*segp == -1 &&
+	    (!STAILQ_EMPTY(&map->bpages) || map->sync_count != 0)))
 		bounce_bus_dmamap_unload(dmat, map);
 
 	if ((dmat->bounce_flags & BF_COULD_BOUNCE) != 0) {
