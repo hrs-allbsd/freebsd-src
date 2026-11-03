@@ -320,8 +320,8 @@ realmaninstall-${__group}: ${__mansrc.${__group}}
 
 manlinksinstall-${__group}:
 .for l t in ${_MANLINKS}
-# On MacOS, assume case folding FS, and don't install links from foo.x to FOO.x.
-.if ${.MAKE.OS} != "Darwin" || ${l:tu} != ${t:tu}
+# Darwin defaults to case folding; allow case-sensitive installation targets.
+.if ${.MAKE.OS} != "Darwin" || ${INSTALL_CASE_SENSITIVE:Uno} == "yes" || ${l:tu} != ${t:tu}
 	${INSTALL_MANLINK} ${${__group}TAG_ARGS} ${DESTDIR}${l}${ZEXT} ${DESTDIR}${t}${ZEXT}
 .endif
 .endfor

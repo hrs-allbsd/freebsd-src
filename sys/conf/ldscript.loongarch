@@ -1,4 +1,4 @@
-OUTPUT_ARCH(loongarch64)
+OUTPUT_ARCH(loongarch)
 ENTRY(_start)
 
 SEARCH_DIR(/usr/lib);

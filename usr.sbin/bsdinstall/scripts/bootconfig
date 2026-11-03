@@ -126,6 +126,7 @@ fi
 if [ -n "$(awk '{if ($2=="/boot/efi") printf("%s\n",$1);}' $PATH_FSTAB)" ]; then
 	case $(uname -m) in
 	    arm64)	ARCHBOOTNAME=aa64 ;;
+	    loongarch)	ARCHBOOTNAME=loongarch64 ;;
 	    amd64)	ARCHBOOTNAME=x64 ;;
 	    riscv)	ARCHBOOTNAME=riscv64 ;;
     #	    arm)	ARCHBOOTNAME=arm ;; # No other support for arm install

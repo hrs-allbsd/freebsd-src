@@ -14,8 +14,8 @@ afterinstall: _installlinks
 .ORDER: realinstall _installlinks
 _installlinks:
 .for s t in ${LINKS}
-# On MacOS, assume case folding FS, and don't install links from foo.x to FOO.x.
-.if ${.MAKE.OS} != "Darwin" || ${s:tu} != ${t:tu}
+# Darwin defaults to case folding; allow case-sensitive installation targets.
+.if ${.MAKE.OS} != "Darwin" || ${INSTALL_CASE_SENSITIVE:Uno} == "yes" || ${s:tu} != ${t:tu}
 .if defined(LINKTAGS)
 	${INSTALL_LINK} ${TAG_ARGS:D${TAG_ARGS},${LINKTAGS}} ${DESTDIR}${s} ${DESTDIR}${t}
 .else
@@ -24,8 +24,8 @@ _installlinks:
 .endif
 .endfor
 .for s t in ${SYMLINKS}
-# On MacOS, assume case folding FS, and don't install links from foo.x to FOO.x.
-.if ${.MAKE.OS} != "Darwin" || ${s:tu} != ${t:tu}
+# Darwin defaults to case folding; allow case-sensitive installation targets.
+.if ${.MAKE.OS} != "Darwin" || ${INSTALL_CASE_SENSITIVE:Uno} == "yes" || ${s:tu} != ${t:tu}
 .if defined(LINKTAGS)
 	${INSTALL_SYMLINK} ${TAG_ARGS:D${TAG_ARGS},${LINKTAGS}} ${s} ${DESTDIR}${t}
 .else

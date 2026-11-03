@@ -1467,7 +1467,8 @@ sched_4bsd_add(struct thread *td, int flags)
 static void
 sched_4bsd_rem(struct thread *td)
 {
-	struct td_sched *ts;
+	/* TS_RUNQ_PTR does not use the thread state in UP builds. */
+	struct td_sched *ts __unused;
 
 	ts = td_get_sched(td);
 	KASSERT(td->td_flags & TDF_INMEM,

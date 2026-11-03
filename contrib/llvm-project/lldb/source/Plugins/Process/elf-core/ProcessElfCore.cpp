@@ -616,6 +616,7 @@ ProcessElfCore::parseSegment(const DataExtractor &segment) {
 llvm::Error ProcessElfCore::parseFreeBSDNotes(llvm::ArrayRef<CoreNote> notes) {
   ArchSpec arch = GetArchitecture();
   bool lp64 = (arch.GetMachine() == llvm::Triple::aarch64 ||
+               arch.GetMachine() == llvm::Triple::loongarch64 ||
                arch.GetMachine() == llvm::Triple::mips64 ||
                arch.GetMachine() == llvm::Triple::ppc64 ||
                arch.GetMachine() == llvm::Triple::x86_64);

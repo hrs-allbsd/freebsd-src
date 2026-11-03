@@ -1431,7 +1431,7 @@ _sysctl=sysctl
 ITOOLS=	[ awk cap_mkdb cat chflags chmod chown cmp cp \
 	date echo egrep find grep id install \
 	ln make mkdir mtree mv pwd_mkdb \
-	rm sed services_mkdb sh sort strip ${_sysctl} test time true uname wc
+	rm sed services_mkdb sh sort ${XSTRIPBIN} ${_sysctl} test time true uname wc
 
 .if ${MK_ZONEINFO} != "no"
 ITOOLS+=tzsetup
@@ -1555,7 +1555,8 @@ distributeworld installworld stageworld: _installcheck_world .PHONY
 	    METALOG=${METALOG} ${IMAKE_INSTALL} ${IMAKE_MTREE} \
 	    DISTBASE=/base DESTDIR=${INSTALL_DDIR}/base \
 	    LOCAL_MTREE=${LOCAL_MTREE:Q} distrib-dirs
-	${INSTALL_SYMLINK} ${INSTALLFLAGS} usr/src/sys ${INSTALL_DDIR}/base/sys
+	PATH=${TMPPATH:Q} ${INSTALL_SYMLINK} ${INSTALLFLAGS} \
+	    usr/src/sys ${INSTALL_DDIR}/base/sys
 .endif # make(distributeworld)
 	${_+_}cd ${.CURDIR}; ${IMAKE} re${.TARGET:S/world$//}; \
 	    ${IMAKEENV} rm -rf ${INSTALLTMP}

@@ -180,6 +180,12 @@ CFLAGS+=	-mno-relax
 .endif
 .endif
 
+# Ordinary LoongArch kernel C code must not use floating-point or vector
+# registers.  The exception entry saves/restores user state explicitly.
+.if ${MACHINE_CPUARCH} == "loongarch"
+CFLAGS+=	-mabi=lp64s -msoft-float -mno-lsx -mno-lasx -mno-relax
+.endif
+
 #
 # For AMD64, we explicitly prohibit the use of FPU, SSE and other SIMD
 # operations inside the kernel itself.  These operations are exclusively
