@@ -48,6 +48,7 @@
 #include <sys/syscall.h>
 #include <sys/sysent.h>
 #include <sys/smp.h>
+#include <sys/uio.h>
 #ifdef KDB
 #include <sys/kdb.h>
 #endif
@@ -209,6 +210,7 @@ dump_regs(struct trapframe *frame)
 	printf("badvaddr: 0x%016lx\n", frame->tf_badvaddr);
 }
 
+
 static void
 syscall_handler(void)
 {
@@ -221,6 +223,22 @@ syscall_handler(void)
 }
 
 static volatile int usegv_count;	/* rate-limit the user-SIGSEGV probe */
+
+static vm_prot_t
+page_fault_access(struct trapframe *frame)
+{
+
+	switch (EXC_CODE(frame->tf_estat)) {
+	case EXCCODE_TLBS:
+	case EXCCODE_TLBM:
+		return (VM_PROT_WRITE);
+	case EXCCODE_TLBI:
+	case EXCCODE_TLBNX:
+		return (VM_PROT_EXECUTE);
+	default:
+		return (VM_PROT_READ);
+	}
+}
 
 static void
 page_fault_handler(struct trapframe *frame, int usermode)
@@ -272,16 +290,7 @@ page_fault_handler(struct trapframe *frame, int usermode)
 	}
 
 	va = trunc_page(evaddr);
-
-	if (EXC_CODE(frame->tf_estat) == EXCCODE_TLBS ||
-	    EXC_CODE(frame->tf_estat) == EXCCODE_TLBM) {
-		ftype = VM_PROT_WRITE;
-	} else if (EXC_CODE(frame->tf_estat) == EXCCODE_TLBI ||
-	    EXC_CODE(frame->tf_estat) == EXCCODE_TLBNX) {
-		ftype = VM_PROT_EXECUTE;
-	} else {
-		ftype = VM_PROT_READ;
-	}
+	ftype = page_fault_access(frame);
 
 	if (VIRT_IS_VALID(va) && pmap_fault(map->pmap, va, ftype))
 		goto done;
@@ -391,6 +400,10 @@ do_trap_supervisor(struct trapframe *frame)
 	case EXCCODE_TLBNR:
 	case EXCCODE_TLBNX:
 	case EXCCODE_TLBPE:
+		/* The thread structure itself can reside in the direct map. */
+		if (pmap_fault_dmap(trunc_page(frame->tf_badvaddr),
+		    page_fault_access(frame)))
+			break;
 		if (curthread->td_md.md_spinlock_count == 0 &&
 			(frame->tf_prmd & CSR_PRMD_PIE) != 0)
 			intr_enable();

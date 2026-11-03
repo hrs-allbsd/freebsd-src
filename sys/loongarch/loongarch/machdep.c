@@ -566,7 +566,7 @@ loongarch_efi_acpi_rsdp(void)
 	efi_guid_t acpi_guid =
 	    {0x8868e871,0xe4f1,0x11d3,
 	    {0xbc,0x22,0x00,0x80,0xc7,0x3c,0x88,0x81}};
-	int i;
+	int i, force_acpi = 0;
 
 	/*
 	 * Prefer FDT when a device tree was passed (QEMU): report "no ACPI" so
@@ -574,7 +574,8 @@ loongarch_efi_acpi_rsdp(void)
 	 * probes and ACPICA all take the FDT path.  Only without an FDT (real
 	 * 3A6000, UEFI/ACPI) do we look up the RSDP in the EFI config tables.
 	 */
-	if (loongarch_have_fdt)
+	TUNABLE_INT_FETCH("hw.acpi.force", &force_acpi);
+	if (loongarch_have_fdt && !force_acpi)
 		return (0);
 
 	if (efi_systbl_phys == 0)
@@ -618,7 +619,7 @@ try_load_dtb(caddr_t kmdp)
 #endif
 
 	if (dtbp == (vm_offset_t)NULL) {
-		printf("ERROR loading DTB\n");
+		/* EFI/ACPI firmware need not supply a device tree. */
 		return;
 	}
 
@@ -868,8 +869,9 @@ initloongarch(struct loongarch_bootparams *bp)
 	}
 	lastaddr = parse_metadata();
 
-	/* set boot cpu id to 0 */
-	boot_cpu = 0;
+	/* The boot processor is logical CPU 0 regardless of its hardware ID. */
+	boot_cpu = csr_read32(LOONGARCH_CSR_CPUID) & 0x3ff;
+	PCPU_SET(hwid, boot_cpu);
 
 	kmdp = preload_search_by_type("elf kernel");
 	if (kmdp == NULL)
@@ -896,7 +898,8 @@ initloongarch(struct loongarch_bootparams *bp)
 	/*
 	 * Exclude reserved memory specified by the device tree.
 	 */
-	fdt_foreach_reserved_mem(fdt_physmem_exclude_region_cb, NULL);
+	if (loongarch_have_fdt)
+		fdt_foreach_reserved_mem(fdt_physmem_exclude_region_cb, NULL);
 #endif
 
 	/* Exclude the EFI framebuffer from our view of physical memory. */

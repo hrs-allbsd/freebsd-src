@@ -55,7 +55,7 @@ vm_paddr_t loongarch_efi_acpi_rsdp(void); /* ACPI RSDP from EFI config table */
 
 /* LoongArch ACPI MADT (APIC) walkers -- defined when DEV_ACPI. */
 int	loongarch_acpi_madt_cpu_count(void);
-void	loongarch_acpi_madt_foreach_cpu(bool (*)(u_int));
+void	loongarch_acpi_madt_foreach_cpu(bool (*)(u_int, u_int));
 
 /*
  * Look up the first MADT BIO_PIC (PCH-PIC) subtable and return its

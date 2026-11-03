@@ -14,6 +14,8 @@
  *   0: SWI0, 1: SWI1, 2-9: HWI0-7, 10: PCOV, 11: Timer, 12: IPI, 13: NMI
  */
 
+#include "opt_hwpmc_hooks.h"
+
 #include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -24,6 +26,9 @@
 #include <sys/cpuset.h>
 #include <sys/interrupt.h>
 #include <sys/smp.h>
+#ifdef HWPMC_HOOKS
+#include <sys/pmckern.h>
+#endif
 
 #include <machine/bus.h>
 #include <machine/cpu.h>
@@ -299,6 +304,17 @@ cpuic_intr(void *arg)
 		if (bit >= INTC_NIRQS)
 			continue;
 
+#ifdef HWPMC_HOOKS
+		/* The module enables PCOV separately on each initialized CPU. */
+		if (bit == IRQ_PCOV) {
+			if (pmc_intr != NULL)
+				(*pmc_intr)(frame);
+			else
+				cpuic_disable_intr(sc->dev, &sc->isrcs[bit].isrc);
+			continue;
+		}
+#endif
+
 		src = &sc->isrcs[bit];
 		if (intr_isrc_dispatch(&src->isrc, frame) != 0) {
 			cpuic_disable_intr(sc->dev, &src->isrc);
@@ -329,11 +345,14 @@ cpuic_setup_ipi(driver_filter_t filt)
 		if (intr_event_create(&isrc->isrc_event, isrc, 0, IRQ_IPI,
 		    NULL, NULL, NULL, NULL, "ipi") != 0)
 			panic("%s: intr_event_create failed", __func__);
-		cpuic_enable_intr(cpuic_sc->dev, isrc);
 	}
 	if (intr_event_add_handler(isrc->isrc_event, "ipi", filt, NULL, NULL,
 	    intr_priority(INTR_TYPE_MISC), INTR_TYPE_MISC, NULL) != 0)
 		panic("%s: intr_event_add_handler failed", __func__);
+	isrc->isrc_handlers++;
+	CPU_SET(PCPU_GET(cpuid), &isrc->isrc_cpu);
+	/* Publish the handler before unmasking a possibly pending IPI. */
+	cpuic_enable_intr(cpuic_sc->dev, isrc);
 }
 #endif	/* SMP */
 
@@ -359,11 +378,15 @@ cpuic_setup_cpu_intr(const char *name, driver_filter_t *filt,
 		    NULL, NULL, NULL, NULL, "int%u", irq);
 		if (error != 0)
 			return (error);
-		cpuic_enable_intr(cpuic_sc->dev, isrc);
 	}
 
 	error = intr_event_add_handler(isrc->isrc_event, name, filt, handler,
 	    arg, intr_priority(flags), flags, cookiep);
+	if (error == 0) {
+		isrc->isrc_handlers++;
+		CPU_SET(PCPU_GET(cpuid), &isrc->isrc_cpu);
+		cpuic_enable_intr(cpuic_sc->dev, isrc);
+	}
 	return (error);
 }
 

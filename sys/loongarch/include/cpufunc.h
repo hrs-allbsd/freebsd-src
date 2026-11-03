@@ -102,7 +102,7 @@ intr_enable(void)
 static __inline void
 flush_icache(void)
 {
-	__asm __volatile("ibar 0" ::);
+	__asm __volatile("ibar 0" ::: "memory");
 }
 
 /* timer */

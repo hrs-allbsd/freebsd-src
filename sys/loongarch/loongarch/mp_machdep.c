@@ -55,6 +55,7 @@
 #include <sys/kdb.h>
 #include <sys/sched.h>
 #include <sys/smp.h>
+#include <sys/sysctl.h>
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
@@ -63,6 +64,7 @@
 #include <vm/vm_map.h>
 
 #include <machine/intr.h>
+#include <machine/machdep.h>
 #include <machine/cpufunc.h>
 #include <machine/smp.h>
 #include <machine/tlb.h>
@@ -75,17 +77,24 @@
 
 #define	MP_BOOTSTACK_SIZE	(kstack_pages * PAGE_SIZE)
 
-uint32_t __loongarch_boot_ap[MAXCPU];
+uint32_t __loongarch_boot_ap[1024];
+static u_int cpu_hwid[MAXCPU];
+static u_int cpu_acpi_id[MAXCPU];
 
-static enum {
-	CPUS_UNKNOWN,
-#ifdef FDT
-	CPUS_FDT,
-#endif
-#ifdef DEV_ACPI
-	CPUS_ACPI,
-#endif
-} cpu_enum_method;
+static u_long smp_disabled_hwtids;
+SYSCTL_ULONG(_machdep, OID_AUTO, smp_disabled_hwtids,
+    CTLFLAG_RDTUN | CTLFLAG_NOFETCH, &smp_disabled_hwtids, 0,
+    "Disabled hardware CPU IDs 0 through 63; the boot CPU is retained");
+
+static int
+sysctl_smp_hwtids(SYSCTL_HANDLER_ARGS)
+{
+
+	return (SYSCTL_OUT(req, cpu_hwid, mp_ncpus * sizeof(cpu_hwid[0])));
+}
+SYSCTL_PROC(_machdep, OID_AUTO, smp_hwtids,
+    CTLTYPE_UINT | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_smp_hwtids, "IU", "Hardware CPU IDs in logical CPU order");
 
 static device_identify_t loongarch64_cpu_identify;
 static device_probe_t loongarch64_cpu_probe;
@@ -97,9 +106,6 @@ extern uint32_t boot_cpu;
 extern cpuset_t all_cpus;
 extern void cpu_exception_handler(void);
 
-#ifdef INVARIANTS
-static uint32_t cpu_reg[MAXCPU][2];
-#endif
 static device_t cpu_list[MAXCPU];
 
 void mpentry(u_long cpuid);
@@ -118,72 +124,20 @@ static volatile int aps_started;
 static volatile int aps_ready;
 
 /*
- * SMP TLB shootdown state.  Each CPU owns a pool of shootdown descriptors
- * (la_tlb_pool[cpu]) and two linked lists built from them: an SLIST free list
- * (la_tlb_free[cpu]) and a pending list (la_tlb_q[cpu]).  An initiator pops a
- * descriptor, fills it, appends it to its pending list, and IPIs the targets;
- * each target drains every other initiator's pending list.  Because every
- * in-flight shootdown from a CPU has its own descriptor, rapid fire-and-forget
- * shootdowns (IE-off callers such as pmap_qenter/UMA) no longer overwrite one
- * another before the targets process them -- the race that silently dropped
- * invalidations and left stale TLBs on remote CPUs under multi-AP load.
- *
- * Per-descriptor cpusets record which targets must flush (targets) and which
- * already have (acked); a descriptor returns to the free list once every
- * target has acked it.  On pool exhaustion the initiator escalates to a full
- * flush (la_tlb_flushall_gen) rather than appending, so no invalidation lost.
+ * One synchronous request per initiating CPU.  A pending bit is cleared by
+ * its target only after a full local invalidation.  No request retains a
+ * pmap pointer, and no handler takes locks held by another initiator.
  */
-#define LA_TLB_POOL	128	/* shootdown descriptors per CPU */
+static cpuset_t tlb_pending[MAXCPU];
+static cpuset_t tlb_requesters;
+static u_long tlb_shootdowns;
+static u_long tlb_acknowledgements;
+SYSCTL_ULONG(_machdep, OID_AUTO, tlb_shootdowns, CTLFLAG_RD,
+    &tlb_shootdowns, 0, "Synchronous TLB shootdown requests");
+SYSCTL_ULONG(_machdep, OID_AUTO, tlb_acknowledgements, CTLFLAG_RD,
+    &tlb_acknowledgements, 0, "Remote TLB shootdown acknowledgements");
 
-struct la_tlb_sd {
-	pmap_t		pmap;
-	uint64_t	addr1;
-	uint64_t	addr2;
-	cpuset_t	targets;		/* CPUs that must flush this */
-	cpuset_t	acked;		/* CPUs that have flushed this */
-	volatile u_int	remaining; /* atomic: targets not yet acked */
-	uint8_t		op;			/* LA_TLB_OP_* */
-	SLIST_ENTRY(la_tlb_sd) free_link;	/* on la_tlb_free[cpu] */
-	TAILQ_ENTRY(la_tlb_sd) pend_link;	/* on la_tlb_q[cpu] */
-};
-
-SLIST_HEAD(la_tlb_freelist, la_tlb_sd);
-TAILQ_HEAD(la_tlb_pendingq, la_tlb_sd);
-
-static struct la_tlb_sd la_tlb_pool[MAXCPU][LA_TLB_POOL];
-static struct la_tlb_freelist la_tlb_free[MAXCPU];
-static struct la_tlb_pendingq la_tlb_q[MAXCPU];
-static struct mtx la_tlb_mtx[MAXCPU];	/* guards free+pending lists */
-static uint32_t la_tlb_flushall_gen[MAXCPU]; /* bumped on pool exhaustion */
-static uint32_t la_tlb_flushall_done[MAXCPU][MAXCPU]; /* [target][initiator] */
-static cpuset_t la_tlb_pending; /* initiators with a non-empty la_tlb_q[] */
-
-/*
- * Per-CPU stale-ASID tracking.  When pmap_activate_sw drops an old pmap's
- * ASID, the old ASID's TLB entries linger.  Record it here; la_tlb_local_flush
- * batch-flushes them (via invtlb op 4) before the target ASID's flush.
- */
-#define LA_STALE_MAX	128
-struct la_stale {
-	uint32_t	asids[LA_STALE_MAX];
-	int		count;
-	bool		overflow;
-};
-static struct la_stale la_stale[MAXCPU];
-
-void
-la_stale_add(uint32_t asid)
-{
-	int cpuid;
-
-	if (asid == 0)
-		return;
-	cpuid = PCPU_GET(cpuid);
-	if (la_stale[cpuid].count < LA_STALE_MAX)
-		la_stale[cpuid].asids[la_stale[cpuid].count++] = asid;
-	else
-		la_stale[cpuid].overflow = true;
-}
+static void la_invlop_handler(void);
 
 /* Temporary variables for init_secondary()  */
 void *dpcpu[MAXCPU - 1];
@@ -262,21 +216,10 @@ loongarch64_cpu_attach(device_t dev)
 static void
 release_aps(void *dummy __unused)
 {
-	int i, tcpu, tdesc;
+	int i;
 
 	if (mp_ncpus == 1)
 		return;
-
-	/* Initialize the per-CPU TLB shootdown pools before APs come online. */
-	for (tcpu = 0; tcpu < MAXCPU; tcpu++) {
-		SLIST_INIT(&la_tlb_free[tcpu]);
-		TAILQ_INIT(&la_tlb_q[tcpu]);
-		for (tdesc = 0; tdesc < LA_TLB_POOL; tdesc++)
-			SLIST_INSERT_HEAD(&la_tlb_free[tcpu],
-			    &la_tlb_pool[tcpu][tdesc], free_link);
-		mtx_init(&la_tlb_mtx[tcpu], "la tlb shootdown",
-		    NULL, MTX_SPIN);
-	}
 
 	/* Setup the IPI handler */
 	cpuic_setup_ipi(ipi_handler);
@@ -299,7 +242,7 @@ release_aps(void *dummy __unused)
 		DELAY(1000);
 	}
 
-	printf("APs not started\n");
+	panic("Secondary CPUs did not become ready");
 }
 SYSINIT(start_aps, SI_SUB_SMP, SI_ORDER_FIRST, release_aps, NULL);
 
@@ -307,10 +250,14 @@ void
 init_secondary(uint32_t cpuid)
 {
 	struct pcpu *pcpup;
+	u_int hwid;
 
-	if (cpuid < boot_cpu)
-		cpuid += mp_maxid + 1;
-	cpuid -= boot_cpu;
+	hwid = cpuid;
+	for (cpuid = 0; cpuid < mp_ncpus; cpuid++) {
+		if (cpu_hwid[cpuid] == hwid)
+			break;
+	}
+	KASSERT(cpuid < mp_ncpus, ("Unknown hardware CPU %u", hwid));
 
 	/* Setup the pcpu pointer */
 	pcpup = &__pcpu[cpuid];
@@ -332,8 +279,8 @@ init_secondary(uint32_t cpuid)
 	 */
 
 	/* Signal the BSP and spin until it has released all APs.  Busy-wait */
-	atomic_add_int(&aps_started, 1);
-	while (!atomic_load_int(&aps_ready))
+	atomic_add_rel_int(&aps_started, 1);
+	while (!atomic_load_acq_int(&aps_ready))
 		cpu_spinwait();
 
 	/* Clear the IPI. */
@@ -342,7 +289,7 @@ init_secondary(uint32_t cpuid)
 	/* Initialize curthread */
 	KASSERT(PCPU_GET(idlethread) != NULL, ("no idle thread"));
 	pcpup->pc_curthread = pcpup->pc_idlethread;
-	schedinit_ap();
+	sched_init_ap();
 
 	/*
 	 * Enable IOCSR IPI delivery; ECFG unmasking of the IRQ_IPI line is
@@ -357,8 +304,11 @@ init_secondary(uint32_t cpuid)
 	/*
 	 * Initialize per-CPU interrupt state for the root PIC.
 	 * This re-enables any interrupts that were set up on the BSP.
+	 * Serialize the PIC's shared interrupt-source CPU masks.
 	 */
+	mtx_lock_spin(&ap_boot_mtx);
 	intr_pic_init_secondary();
+	mtx_unlock_spin(&ap_boot_mtx);
 
 #ifndef EARLY_AP_STARTUP
 	/* Start per-CPU event timers. */
@@ -417,257 +367,102 @@ smp_after_idle_runnable(void *arg __unused)
 SYSINIT(smp_after_idle_runnable, SI_SUB_SMP, SI_ORDER_ANY,
     smp_after_idle_runnable, NULL);
 
-void
-la_stale_reset(void)
-{
-	int cpuid = PCPU_GET(cpuid);
-
-	la_stale[cpuid].count = 0;
-	la_stale[cpuid].overflow = false;
-}
-
-/*
- * Perform the local TLB invalidation described by (pmap, op, addr1, addr2).
- */
 static void
-la_tlb_local_flush(pmap_t pmap, uint8_t op, uint64_t addr1, uint64_t addr2)
+la_tlb_pending_load(u_int cpu, cpuset_t *mask)
 {
-	uint32_t asid;
-	uint64_t va;
+	u_int i;
 
-	if (pmap == kernel_pmap) {
-		asid = csr_read32(LOONGARCH_CSR_ASID) & CSR_ASID_ASID;
-		switch (op) {
-		case LA_TLB_OP_PAGE:
-			invtlb(INVTLB_ADDR_GTRUE_OR_ASID, asid,
-			    addr1 & ~((PAGE_SIZE << 1) - 1));
-			break;
-		case LA_TLB_OP_RANGE:
-			for (va = addr1 & ~((PAGE_SIZE << 1) - 1);
-			    va < addr2; va += (PAGE_SIZE << 1))
-				invtlb(INVTLB_ADDR_GTRUE_OR_ASID, asid, va);
-			break;
-		default:
-			invtlb_all(INVTLB_CURRENT_ALL);
-			/*
-			 * CURRENT_ALL flushed every entry on this CPU,
-			 * including all stale user-ASID entries.  Reset
-			 * the stale tracker so the next user-pmap flush
-			 * doesn't repeat a full G=0 invalidation for
-			 * entries that no longer exist.
-			 */
-			la_stale_reset();
-			break;
-		}
-	} else {
-		int cpuid = PCPU_GET(cpuid);
-		int i;
-
-		critical_enter();
-
-		/*
-		 * Batch-flush stale ASIDs from prior context switches.
-		 * If the stale array overflowed (many switches without
-		 * an invalidation), do a full G=0 flush to catch all
-		 * stale ASIDs including the dropped ones -- the target
-		 * ASID's entries are also flushed, so skip it.
-		 */
-		if (la_stale[cpuid].overflow) {
-			invtlb_all(INVTLB_CURRENT_GFALSE);
-		} else {
-			for (i = 0; i < la_stale[cpuid].count; i++)
-				invtlb(INVTLB_GFALSE_AND_ASID,
-				    la_stale[cpuid].asids[i], 0);
-			/* Flush the target pmap's ASID entries. */
-			asid = pmap_get_asid(pmap, cpuid);
-			if (asid != 0)
-				invtlb(INVTLB_GFALSE_AND_ASID, asid, 0);
-			else
-				invtlb_all(INVTLB_CURRENT_GFALSE);
-		}
-		la_stale[cpuid].count = 0;
-		la_stale[cpuid].overflow = false;
-
-		critical_exit();
-	}
+	for (i = 0; i < nitems(mask->__bits); i++)
+		mask->__bits[i] = atomic_load_acq_long(&tlb_pending[cpu].__bits[i]);
 }
 
-/*
- * Synchronous TLB shootdown via per-CPU lists of descriptors.
- *
- * The initiator pops a descriptor from its per-CPU pool, fills it, appends it
- * to its pending list, and IPIs the targets; the handler drains every other
- * initiator's pending list.  Because every in-flight shootdown from a CPU owns
- * its own descriptor, fire-and-forget shootdowns from the same CPU (IE-off
- * callers such as pmap_qenter/UMA) no longer overwrite an earlier one before
- * the targets have flushed it -- the race that silently dropped invalidations
- * and left stale TLBs on remote CPUs under multi-AP load.
- *
- * A descriptor returns to the pool once every target has acked it
- * (sd->remaining == 0); the synchronous (IE-on) path spin-waits on that.  An
- * IE-off caller skips the wait (fire-and-forget) -- its descriptor stays on the
- * list until the targets drain it.  If the pool is exhausted the initiator
- * escalates to a full flush (la_tlb_flushall_gen), so no invalidation is lost.
- */
-void
-smp_targeted_tlb_shootdown(pmap_t pmap, vm_offset_t addr1, vm_offset_t addr2,
-    uint8_t op)
-{
-	struct la_tlb_sd *sd, *old;
-	cpuset_t mask;
-	u_int count;
-	uint32_t fagen;
-	int cpu, self;
-
-	if (kdb_active || KERNEL_PANICKED() || !smp_started) {
-		la_tlb_local_flush(pmap, op, addr1, addr2);
-		return;
-	}
-
-	mask = pmap->pm_active;
-	self = PCPU_GET(cpuid);
-	CPU_CLR(self, &mask);
-	if (CPU_EMPTY(&mask)) {
-		la_tlb_local_flush(pmap, op, addr1, addr2);
-		return;
-	}
-	count = CPU_COUNT(&mask);
-
-	/*
-	 * Critical section + per-CPU spinlock across the list manipulation,
-	 * IPI, and (optional) wait.  IE stays on so incoming shootdown IPIs are
-	 * still serviced; la_invlop_handler skips this CPU's own list, so it
-	 * never blocks on the lock we hold here (no self-deadlock).
-	 */
-	critical_enter();
-	mtx_lock_spin(&la_tlb_mtx[self]);
-
-	/* Reclaim fully-acked descriptors (any position) back to the
-	 * free list. */
-	TAILQ_FOREACH_SAFE(sd, &la_tlb_q[self], pend_link, old) {
-		if (atomic_load_int(&sd->remaining) == 0) {
-			TAILQ_REMOVE(&la_tlb_q[self], sd, pend_link);
-			SLIST_INSERT_HEAD(&la_tlb_free[self], sd, free_link);
-		}
-	}
-	if (TAILQ_EMPTY(&la_tlb_q[self]))
-		CPU_CLR_ATOMIC(self, &la_tlb_pending);
-
-	sd = SLIST_FIRST(&la_tlb_free[self]);
-	if (sd != NULL) {
-		SLIST_REMOVE_HEAD(&la_tlb_free[self], free_link);
-		sd->pmap = pmap;
-		sd->addr1 = addr1;
-		sd->addr2 = addr2;
-		sd->op = op;
-		sd->targets = mask;
-		CPU_ZERO(&sd->acked);
-		atomic_store_int(&sd->remaining, count);
-		TAILQ_INSERT_TAIL(&la_tlb_q[self], sd, pend_link);
-		CPU_SET_ATOMIC(self, &la_tlb_pending);
-		mtx_unlock_spin(&la_tlb_mtx[self]);
-
-		ipi_selected(mask, IPI_TLB);
-		la_tlb_local_flush(pmap, op, addr1, addr2);
-
-		if ((csr_read32(LOONGARCH_CSR_CRMD) & CSR_CRMD_IE) != 0) {
-			TLB_DBG("TLB shootdown: cpu%d sync wait mask=%#x "
-			    "op=%d va=%#lx\n",
-			    self, *(uint32_t *)&mask, op, (u_long)addr1);
-			while (atomic_load_int(&sd->remaining) != 0)
-				cpu_spinwait();
-		} else {
-			/*
-			 * Interrupts disabled: we cannot spin-wait for the
-			 * targets to drain this descriptor.  It stays on the
-			 * pending list, still referencing sd->pmap, until
-			 * la_invlop_handler drains it (and calls
-			 * pmap_get_asid(sd->pmap)).  Only kernel_pmap
-			 * (immortal) is safe to reference that way -- a user
-			 * pmap could be freed by pmap_release before the
-			 * targets drain, a use-after-free.  Every current
-			 * IE-off caller targets kernel_pmap; keep it that way.
-			 */
-			KASSERT(pmap == kernel_pmap,
-			    ("IE-off TLB shootdown posted for non-kernel "
-			    "pmap %p",
-			    pmap));
-		}
-	} else {
-		/*
-		 * Pool exhausted (>= LA_TLB_POOL in-flight from this CPU):
-		 * escalate to a full flush so no invalidation is lost; the
-		 * targets pick this up via la_tlb_flushall_gen.
-		 */
-		atomic_add_int(&la_tlb_flushall_gen[self], 1);
-		fagen = atomic_load_int(&la_tlb_flushall_gen[self]);
-		CPU_SET_ATOMIC(self, &la_tlb_pending);
-		mtx_unlock_spin(&la_tlb_mtx[self]);
-
-		ipi_selected(mask, IPI_TLB);
-		la_tlb_local_flush(pmap, LA_TLB_OP_ALL, 0, 0);
-
-		if ((csr_read32(LOONGARCH_CSR_CRMD) & CSR_CRMD_IE) != 0) {
-			CPU_FOREACH(cpu) {
-				if (!CPU_ISSET(cpu, &mask))
-					continue;
-				while (atomic_load_int(
-				    &la_tlb_flushall_done[cpu][self]) < fagen)
-					cpu_spinwait();
-			}
-		}
-	}
-	critical_exit();
-}
-
-/*
- * IPI_TLB handler: drain every other initiator's pending list, flushing each
- * descriptor this CPU hasn't acked yet, and service any pending full-flush
- * fallback.  This CPU's own list (i == self) is skipped -- the initiator
- * flushes itself locally, and taking our own lock here would self-deadlock if
- * we interrupted the initiator while it holds it.  The flush happens before
- * the ack so the initiator's wait (on sd->remaining) only completes once this
- * CPU's stale entry is actually gone.
- */
 static void
 la_invlop_handler(void)
 {
-	struct la_tlb_sd *sd;
-	cpuset_t pend;
-	uint32_t fagen;
-	int self, i;
+	cpuset_t mask;
+	u_int cpu, self;
 
 	self = PCPU_GET(cpuid);
-	/*
-	 * Scan only initiators that currently have descriptors queued, instead
-	 * of every CPU.  An initiator sets its bit under la_tlb_mtx[] before
-	 * sending the IPI, and the IPI doorbell fence publishes that store
-	 * before this handler runs, so a just-posted descriptor is never
-	 * missed.  A stale bit (the initiator drained its queue after this
-	 * snapshot) is harmless: we lock, scan an empty queue, and exit.
-	 */
-	pend = la_tlb_pending;
-	CPU_CLR(self, &pend);
-	CPU_FOREACH(i) {
-		if (!CPU_ISSET(i, &pend))
+	CPU_FOREACH(cpu) {
+		if (cpu == self)
 			continue;
-		mtx_lock_spin(&la_tlb_mtx[i]);
-		TAILQ_FOREACH(sd, &la_tlb_q[i], pend_link) {
-			if (CPU_ISSET(self, &sd->targets) &&
-			    !CPU_ISSET(self, &sd->acked)) {
-				la_tlb_local_flush(sd->pmap, sd->op,
-				    sd->addr1, sd->addr2);
-				CPU_SET(self, &sd->acked);
-				atomic_subtract_int(&sd->remaining, 1);
-			}
-		}
-		fagen = atomic_load_int(&la_tlb_flushall_gen[i]);
-		if (fagen > atomic_load_int(&la_tlb_flushall_done[self][i])) {
-			la_tlb_local_flush(kernel_pmap, LA_TLB_OP_ALL, 0, 0);
-			atomic_store_int(&la_tlb_flushall_done[self][i], fagen);
-		}
-		mtx_unlock_spin(&la_tlb_mtx[i]);
+		la_tlb_pending_load(cpu, &mask);
+		if (!CPU_ISSET(self, &mask))
+			continue;
+		invtlb_all(INVTLB_CURRENT_ALL);
+		flush_icache();
+		atomic_add_long(&tlb_acknowledgements, 1);
+		atomic_thread_fence_rel();
+		CPU_CLR_ATOMIC(self, &tlb_pending[cpu]);
 	}
+}
+
+/* Spin-lock and rendezvous waiters must acknowledge TLB requests too. */
+void
+loongarch_cpu_spinwait(void)
+{
+	register_t intr;
+	u_int i;
+
+	__asm __volatile("" ::: "memory");
+	if (!smp_started)
+		return;
+	for (i = 0; i < nitems(tlb_requesters.__bits); i++) {
+		if (atomic_load_acq_long(&tlb_requesters.__bits[i]) != 0)
+			break;
+	}
+	if (i == nitems(tlb_requesters.__bits))
+		return;
+	critical_enter();
+	intr = intr_disable();
+	la_invlop_handler();
+	intr_restore(intr);
+	critical_exit();
+}
+
+void
+smp_invalidate_tlb(void)
+{
+	cpuset_t mask;
+	register_t intr;
+	u_int self;
+
+	critical_enter();
+	intr = intr_disable();
+	if (kdb_active || KERNEL_PANICKED() || !smp_started) {
+		invtlb_all(INVTLB_CURRENT_ALL);
+		flush_icache();
+		goto out;
+	}
+	self = PCPU_GET(cpuid);
+	mask = all_cpus;
+	CPU_CLR(self, &mask);
+	/*
+	 * Invalidate on every CPU, including inactive ASIDs.  This also
+	 * covers a CPU switching into a pmap during a page-table update.
+	 * Publish the page-table stores before making the request visible.
+	 */
+	CPU_COPY_STORE_REL(&mask, &tlb_pending[self]);
+	CPU_SET_ATOMIC(self, &tlb_requesters);
+	atomic_add_long(&tlb_shootdowns, 1);
+	ipi_selected(mask, IPI_TLB);
+	invtlb_all(INVTLB_CURRENT_ALL);
+	flush_icache();
+	for (;;) {
+		la_tlb_pending_load(self, &mask);
+		if (CPU_EMPTY(&mask))
+			break;
+		/*
+		 * Service concurrent initiators even with interrupts disabled.
+		 * Waiting for a hardware IPI here would deadlock CPUs that
+		 * both entered with interrupts masked by a spin lock.
+		 */
+		cpu_spinwait();
+	}
+	CPU_CLR_ATOMIC(self, &tlb_requesters);
+out:
+	intr_restore(intr);
+	critical_exit();
 }
 
 static int
@@ -787,190 +582,101 @@ cpu_mp_probe(void)
 	return (mp_ncpus > 1);
 }
 
-#ifdef FDT
 static bool
-cpu_init_fdt(u_int id, phandle_t node, u_int addr_size, pcell_t *reg)
+cpu_add(u_int hwid)
 {
-	struct pcpu *pcpup;
-	u_int cpuid;
-	uint64_t reg_data;
-	int naps;
-	uint64_t addr;
+	u_int cpu;
 
-	KASSERT(id < MAXCPU, ("Too many CPUs"));
-
-	KASSERT(addr_size == 1 || addr_size == 2, ("Invalid register size"));
-#ifdef INVARIANTS
-	cpu_reg[id][0] = reg[0];
-	if (addr_size == 2)
-		cpu_reg[id][1] = reg[1];
-#endif
-
-	reg_data = reg[0];
-	if (addr_size == 2) {
-		reg_data <<= 32;
-		reg_data |= reg[1];
-	}
-
-	cpuid = (u_int)reg_data;
-
-	KASSERT(cpuid < MAXCPU, ("Too many cpus."));
-
-	/* We are already running on this cpu */
-	if (cpuid == boot_cpu)
+	if (hwid >= nitems(__loongarch_boot_ap))
 		return (true);
-
-	/*
-	 * Rotate the CPU IDs to put the boot CPU as CPU 0.
-	 * We keep the other CPUs ordered.
-	 */
-	if (cpuid < boot_cpu)
-		cpuid += mp_maxid + 1;
-	cpuid -= boot_cpu;
-
-	/* Check if we are able to start this cpu */
-	if (cpuid > mp_maxid)
-		return (false);
-
-	pcpup = &__pcpu[cpuid];
-	pcpu_init(pcpup, cpuid, sizeof(struct pcpu));
-
-	dpcpu[cpuid - 1] = kmem_malloc(DPCPU_SIZE, M_WAITOK | M_ZERO);
-	dpcpu_init(dpcpu[cpuid - 1], cpuid);
-
-	bootstacks[cpuid] = kmem_malloc(MP_BOOTSTACK_SIZE, M_WAITOK | M_ZERO);
-
-	naps = atomic_load_int(&aps_started);
-	bootstack = (char *)bootstacks[cpuid] + MP_BOOTSTACK_SIZE;
-
-	if (bootverbose)
-		printf("Starting CPU %u\n", cpuid);
-
-	addr = pmap_extract(pmap_kernel(), (vm_offset_t)mpentry);
-	printf("secondary cpu entry: %p\n", (void*)addr);
-	/*
-	 * Address the AP by its hardware id (the raw FDT reg value in
-	 * reg_data), not the renumbered 0-based cpuid: csr_mail_send targets a
-	 * physical CPU, and the AP side (locore.S mpentry) indexes
-	 * __loongarch_boot_ap by CSR_CPUID == reg_data.  ipi_cpu() takes the
-	 * 0-based cpuid (it indexes cpuid_to_pcpu[]), so it keeps cpuid.
-	 */
-	csr_mail_send(addr, (u_int)reg_data, 0);
-	ipi_cpu(cpuid, 2);
-
-	atomic_store_32(&__loongarch_boot_ap[(u_int)reg_data], 1);
-
-	/* Wait for the AP to switch to its boot stack. */
-	while (atomic_load_int(&aps_started) < naps + 1)
-		cpu_spinwait();
-
-	CPU_SET(cpuid, &all_cpus);
-
+	if (hwid != boot_cpu && hwid < sizeof(smp_disabled_hwtids) * NBBY &&
+	    (smp_disabled_hwtids & (1UL << hwid)) != 0)
+		return (true);
+	for (cpu = 0; cpu < mp_ncpus; cpu++) {
+		if (cpu_hwid[cpu] == hwid)
+			return (true);
+	}
+	if (mp_ncpus <= mp_maxid)
+		cpu_hwid[mp_ncpus++] = hwid;
 	return (true);
 }
-#endif
 
 #ifdef DEV_ACPI
-/*
- * ACPI twin of cpu_init_fdt: start one AP identified by its hardware core id
- * (the MADT CORE_PIC CoreId, == CSR_CPUID).  The AP is woken the same way as
- * on FDT (csr_mail_send of the mpentry address + IPI); only the enumeration
- * source differs.
- */
 static bool
-cpu_init_acpi(u_int coreid)
+cpu_init_acpi(u_int hwid, u_int uid)
 {
-	struct pcpu *pcpup;
-	u_int cpuid;
-	int naps;
-	uint64_t addr;
+	u_int cpu;
 
-	if (coreid == boot_cpu)
-		return (true);
-
-	cpuid = coreid;
-	if (cpuid < boot_cpu)
-		cpuid += mp_maxid + 1;
-	cpuid -= boot_cpu;
-
-	if (cpuid > mp_maxid)
-		return (false);
-
-	pcpup = &__pcpu[cpuid];
-	pcpu_init(pcpup, cpuid, sizeof(struct pcpu));
-
-	dpcpu[cpuid - 1] = kmem_malloc(DPCPU_SIZE, M_WAITOK | M_ZERO);
-	dpcpu_init(dpcpu[cpuid - 1], cpuid);
-
-	bootstacks[cpuid] = kmem_malloc(MP_BOOTSTACK_SIZE, M_WAITOK | M_ZERO);
-
-	naps = atomic_load_int(&aps_started);
-	bootstack = (char *)bootstacks[cpuid] + MP_BOOTSTACK_SIZE;
-
-	if (bootverbose)
-		printf("Starting CPU %u\n", cpuid);
-
-	addr = pmap_extract(pmap_kernel(), (vm_offset_t)mpentry);
-	csr_mail_send(0, coreid, 0);
-	csr_mail_send(addr, coreid, 0);
-	ipi_write_action(coreid, 1);
-
-	atomic_store_32(&__loongarch_boot_ap[coreid], 1);
-
-	/* Wait for the AP to switch to its boot stack. */
-	while (atomic_load_int(&aps_started) < naps + 1)
-		cpu_spinwait();
-
-	/*
-	 * Mark the AP present: CPU_ABSENT() tests all_cpus, and without this
-	 * cpu_initclocks_ap()->hardclock_sync() panics "Absent CPU N" on every
-	 * AP (concurrent panics garble the console).  Matches cpu_init_fdt().
-	 */
-	CPU_SET(cpuid, &all_cpus);
-
+	cpu_add(hwid);
+	for (cpu = 0; cpu < mp_ncpus; cpu++) {
+		if (cpu_hwid[cpu] == hwid) {
+			cpu_acpi_id[cpu] = uid;
+			break;
+		}
+	}
 	return (true);
 }
 #endif
 
-/* Initialize and fire up non-boot processors */
+#ifdef FDT
+static bool
+cpu_init_fdt(u_int id __unused, phandle_t node __unused, u_int addr_size,
+    pcell_t *reg)
+{
+	uint64_t hwid;
+
+	if (addr_size != 1 && addr_size != 2)
+		return (true);
+	hwid = reg[0];
+	if (addr_size == 2)
+		hwid = (hwid << 32) | reg[1];
+	if (hwid < nitems(__loongarch_boot_ap))
+		cpu_add(hwid);
+	return (true);
+}
+#endif
+
+/* Initialize and fire up non-boot processors. */
 void
 cpu_mp_start(void)
 {
+	struct pcpu *pcpup;
+	vm_paddr_t entry;
+	u_int cpu, hwid;
+	int naps, i;
+
 	mtx_init(&ap_boot_mtx, "ap boot", NULL, MTX_SPIN);
-
-	CPU_SET(boot_cpu, &all_cpus);
-
-#ifdef DEV_ACPI
-	/*
-	 * On ACPI/3A6000: enable all IOCSR IPI vectors and the extended I/O
-	 * interrupt controller before waking the APs.  Firmware on QEMU leaves
-	 * these enabled (and its FDT eioic driver attaches), but on 3A6000 they
-	 * are masked and the eioic driver never attaches, so do it here.
-	 */
+	CPU_SET(0, &all_cpus);
+	PCPU_SET(hwid, boot_cpu);
+	PCPU_SET(acpi_id, cpu_acpi_id[0]);
 	iocsr_write32(0xffffffff, LOONGARCH_IOCSR_IPI_EN);
-	/*
-	 * EXTIOI was already enabled + the EIOINTC router programmed once
-	 * in eioic_attach() (BUS_PASS_INTERRUPT, before device probe).
-	 * Do NOT re-enable here: eiointc_enable_extioi() resets the global
-	 * ROUTE to 0, creating a window where all device interrupts are
-	 * dropped.  eiointc_enable() is called only on the first CPU of
-	 * each node.
-	 */
-#endif
-
-	switch(cpu_enum_method) {
-#ifdef FDT
-	case CPUS_FDT:
-		ofw_cpu_early_foreach(cpu_init_fdt, true);
-		break;
-#endif
-#ifdef DEV_ACPI
-	case CPUS_ACPI:
-		loongarch_acpi_madt_foreach_cpu(cpu_init_acpi);
-		break;
-#endif
-	case CPUS_UNKNOWN:
-		break;
+	entry = pmap_extract(kernel_pmap, (vm_offset_t)mpentry);
+	for (cpu = 1; cpu <= mp_maxid; cpu++) {
+		hwid = cpu_hwid[cpu];
+		pcpup = &__pcpu[cpu];
+		pcpu_init(pcpup, cpu, sizeof(*pcpup));
+		pcpup->pc_hwid = hwid;
+		pcpup->pc_acpi_id = cpu_acpi_id[cpu];
+		dpcpu[cpu - 1] = kmem_malloc(DPCPU_SIZE, M_WAITOK | M_ZERO);
+		dpcpu_init(dpcpu[cpu - 1], cpu);
+		bootstacks[cpu] = kmem_malloc(MP_BOOTSTACK_SIZE,
+		    M_WAITOK | M_ZERO);
+		bootstack = (char *)bootstacks[cpu] + MP_BOOTSTACK_SIZE;
+		naps = atomic_load_acq_int(&aps_started);
+		if (bootverbose)
+			printf("Starting CPU %u (hardware ID %u)\n", cpu, hwid);
+		/* Publish the stack and CPU mapping before the AP reads them. */
+		atomic_store_rel_32(&__loongarch_boot_ap[hwid], 1);
+		csr_mail_send(entry, hwid, 0);
+		ipi_write_action(hwid, 1);
+		for (i = 0; i < 5000; i++) {
+			if (atomic_load_acq_int(&aps_started) != naps)
+				break;
+			DELAY(1000);
+		}
+		if (i == 5000)
+			panic("CPU %u (hardware ID %u) did not start", cpu, hwid);
+		CPU_SET(cpu, &all_cpus);
 	}
 }
 
@@ -992,69 +698,35 @@ cpu_mp_announce(void)
 void
 cpu_mp_setmaxid(void)
 {
-	int cores;
-	int maxcpus = MAXCPU;
+	int limit, ncpu;
 
-	/*
-	 * Honor the kern.maxcpus loader tunable to limit the number of CPUs
-	 * brought online (for SMP debugging).  Without this, all cores found in
-	 * the MADT/FDT are started regardless.
-	 */
-	TUNABLE_INT_FETCH("kern.maxcpus", &maxcpus);
-	if (maxcpus < 1)
-		maxcpus = 1;
-
+	limit = MAXCPU;
+	TUNABLE_INT_FETCH("kern.maxcpus", &limit);
+	limit = MAX(1, MIN(limit, MAXCPU));
+	if (TUNABLE_INT_FETCH("hw.ncpu", &ncpu) && ncpu > 0)
+		limit = MIN(limit, ncpu);
+	mp_maxid = limit - 1;
+	TUNABLE_ULONG_FETCH("machdep.smp_disabled_hwtids", &smp_disabled_hwtids);
+	mp_ncpus = 1;
+	for (ncpu = 0; ncpu < MAXCPU; ncpu++)
+		cpu_acpi_id[ncpu] = 0xffffffff;
+	cpu_hwid[0] = boot_cpu;
 #ifdef DEV_ACPI
-	if (loongarch_efi_acpi_rsdp() != 0) {
-		cores = loongarch_acpi_madt_cpu_count();
-		if (cores > 0) {
-			cores = MIN(cores, MAXCPU);
-			cores = MIN(cores, maxcpus);
-			if (bootverbose)
-				printf("Found %d CPUs in the MADT\n", cores);
-			mp_ncpus = cores;
-			mp_maxid = cores - 1;
-			cpu_enum_method = CPUS_ACPI;
-		} else {
-			if (bootverbose)
-				printf("No CPUs in MADT, limiting to 1 core\n");
-			mp_ncpus = 1;
-			mp_maxid = 0;
-		}
+	if (loongarch_efi_acpi_rsdp() != 0 &&
+	    loongarch_acpi_madt_cpu_count() > 0) {
+		loongarch_acpi_madt_foreach_cpu(cpu_init_acpi);
 	} else
 #endif
 #ifdef FDT
 	{
-		cores = ofw_cpu_early_foreach(NULL, true);
-		if (cores > 0) {
-			cores = MIN(cores, MAXCPU);
-			cores = MIN(cores, maxcpus);
-			if (bootverbose)
-				printf("Found %d CPUs in the device "
-				    "tree\n", cores);
-			mp_ncpus = cores;
-			mp_maxid = cores - 1;
-			cpu_enum_method = CPUS_FDT;
-		} else {
-			if (bootverbose)
-				printf("No CPU data, limiting to 1 core\n");
-			mp_ncpus = 1;
-			mp_maxid = 0;
-		}
+		ofw_cpu_early_foreach(cpu_init_fdt, true);
 	}
 #else
 	{
-		if (bootverbose)
-			printf("No CPU data, limiting to 1 core\n");
-		mp_ncpus = 1;
-		mp_maxid = 0;
 	}
 #endif
-
-	if (TUNABLE_INT_FETCH("hw.ncpu", &cores)) {
-		if (cores > 0 && cores < mp_ncpus) {
-			mp_ncpus = cores;
-			mp_maxid = cores - 1;
-		}
-	}
+	mp_maxid = mp_ncpus - 1;
+	if (bootverbose)
+		printf("SMP: %d CPUs selected, boot hardware ID %u\n",
+		    mp_ncpus, boot_cpu);
 }

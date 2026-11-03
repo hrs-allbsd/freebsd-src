@@ -77,7 +77,12 @@
 
 #define	cpu_getstack(td)	((td)->td_frame->tf_regs[3])
 #define	cpu_setstack(td, sp)	((td)->td_frame->tf_regs[3] = (sp))
-#define	cpu_spinwait()	__asm__ __volatile__("": : :"memory")
+#if defined(_KERNEL) && defined(SMP)
+void loongarch_cpu_spinwait(void);
+#define cpu_spinwait() loongarch_cpu_spinwait()
+#else
+#define cpu_spinwait() __asm__ __volatile__("": : :"memory")
+#endif
 #define	cpu_lock_delay()	DELAY(1)
 
 /*

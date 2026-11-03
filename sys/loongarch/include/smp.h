@@ -53,19 +53,7 @@ void ipi_selected(cpuset_t cpus, u_int ipi);
 uint32_t ipi_read_clear(int cpu);
 void csr_mail_send(uint64_t data, int cpu, int mailbox);
 
-/* SMP TLB shootdown op codes (stored in a shootdown descriptor's op field). */
-#define	LA_TLB_OP_PAGE		0
-#define	LA_TLB_OP_RANGE		1
-#define	LA_TLB_OP_ALL		2
-
-struct pmap;
-
-/* Synchronous TLB shootdown via IPIs with a 2-D scoreboard. */
-void smp_targeted_tlb_shootdown(struct pmap *pmap, vm_offset_t addr1,
-    vm_offset_t addr2, uint8_t op);
-
-/* Record a stale ASID whose TLB entries should be batch-flushed. */
-void la_stale_add(uint32_t asid);
-void la_stale_reset(void);
+/* Synchronous invalidation, including callers with interrupts disabled. */
+void smp_invalidate_tlb(void);
 
 #endif /* !_MACHINE_SMP_H_ */

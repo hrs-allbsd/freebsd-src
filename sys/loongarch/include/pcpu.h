@@ -44,6 +44,7 @@
 /* Keep in sync with db_show_mdpcpu() */
 #define	PCPU_MD_FIELDS						\
 	struct pmap *pc_curpmap;	/* Currently active pmap */	\
+	u_int pc_hwid;		/* Hardware CPU id */		\
 	uint32_t pc_pending_ipis;	/* IPIs pending to this CPU */	\
 	uint64_t pc_kernel_sp;  /* kernel sp */ 	\
 	uint64_t pc_asid_value;	/* ASID */ \

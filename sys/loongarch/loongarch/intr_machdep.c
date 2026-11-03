@@ -85,7 +85,7 @@ ipi_send(struct pcpu *pc, int ipi)
 	 * take the IPI but see a zero bitmap and return without processing.
 	 */
 	fence();
-	ipi_write_action(pc->pc_cpuid, (uint32_t)ipi);
+	ipi_write_action(pc->pc_hwid, (uint32_t)ipi);
 	CTR1(KTR_SMP, "%s: sent", __func__);
 }
 
@@ -116,7 +116,6 @@ ipi_selected(cpuset_t cpus, u_int ipi)
 		if (CPU_ISSET(pc->pc_cpuid, &cpus)) {
 			CTR3(KTR_SMP, "%s: pc: %p, ipi: %x\n",
 			    __func__, pc, ipi);
-			atomic_set_32(&pc->pc_pending_ipis, ipi);
 			ipi_send(pc, (uint32_t)ipi);
 		}
 	}
