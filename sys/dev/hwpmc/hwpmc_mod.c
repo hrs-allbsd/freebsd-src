@@ -220,7 +220,7 @@ static bool	pmc_can_allocate_rowindex(struct proc *p, unsigned int ri,
     int cpu);
 static void	pmc_capture_user_callchain(int cpu, int soft,
     struct trapframe *tf);
-static void	pmc_cleanup(void);
+static int	pmc_cleanup(void);
 static int	pmc_detach_process(struct proc *p, struct pmc *pm);
 static int	pmc_detach_one_process(struct proc *p, struct pmc *pm,
     int flags);
@@ -4550,6 +4550,12 @@ pmc_syscall_handler(struct thread *td, void *syscall_args)
 		}
 
 		if (PMC_IS_SAMPLING_MODE(PMC_TO_MODE(pm))) {
+			/* PCOV asserts at bit 63, so larger periods cannot run. */
+			if (PMC_TO_CLASS(pm) == PMC_CLASS_LOONGARCH &&
+			    sc.pm_count > (UINT64_MAX >> 1)) {
+				error = EINVAL;
+				break;
+			}
 			/*
 			 * Don't permit requested sample rate to be
 			 * less than pmc_mincount.
@@ -5923,7 +5929,7 @@ pmc_initialize(void)
 }
 
 /* prepare to be unloaded */
-static void
+static int
 pmc_cleanup(void)
 {
 	struct pmc_binding pb;
@@ -5935,16 +5941,24 @@ pmc_cleanup(void)
 
 	PMCDBG0(MOD,INI,0, "cleanup");
 
+	/*
+	 * Unload holds the linker lock and shutdown holds the module lock.
+	 * Sampling startup takes these locks with pmc_sx held, so neither
+	 * entry may wait for pmc_sx.  Leave hooks and sampling state intact
+	 * if another PMC operation is in progress.
+	 */
+	if (!sx_try_xlock(&pmc_sx))
+		return (EBUSY);
+
+	if (pmc_hook == NULL) {	/* being unloaded already */
+		sx_xunlock(&pmc_sx);
+		return (0);
+	}
+
 	/* switch off sampling */
 	CPU_FOREACH(cpu)
 		DPCPU_ID_SET(cpu, pmc_sampled, 0);
 	pmc_intr = NULL;
-
-	sx_xlock(&pmc_sx);
-	if (pmc_hook == NULL) {	/* being unloaded already */
-		sx_xunlock(&pmc_sx);
-		return;
-	}
 
 	pmc_hook = NULL; /* prevent new threads from entering module */
 
@@ -6093,6 +6107,7 @@ pmc_cleanup(void)
 	counter_u64_free(pmc_stats.pm_merges);
 	counter_u64_free(pmc_stats.pm_overwrites);
 	sx_xunlock(&pmc_sx);	/* we are done */
+	return (0);
 }
 
 /*
@@ -6116,7 +6131,9 @@ load(struct module *module __unused, int cmd, void *arg __unused)
 		break;
 	case MOD_UNLOAD:
 	case MOD_SHUTDOWN:
-		pmc_cleanup();
+		error = pmc_cleanup();
+		if (error != 0)
+			break;
 		PMCDBG0(MOD,INI,1, "unloaded");
 		break;
 	default:

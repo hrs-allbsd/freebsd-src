@@ -51,6 +51,10 @@
 #include "libpmcinternal.h"
 
 /* Function prototypes */
+#if defined(__loongarch__)
+static int loongarch_allocate_pmc(enum pmc_event, char *,
+    struct pmc_op_pmcallocate *);
+#endif
 #if defined(__amd64__) || defined(__i386__)
 static int k8_allocate_pmc(enum pmc_event _pe, char *_ctrspec,
     struct pmc_op_pmcallocate *_pmc_config);
@@ -150,6 +154,7 @@ PMC_CLASSDEP_TABLE(dmc620_pmu_c, DMC620_PMU_C);
 PMC_CLASSDEP_TABLE(ppc7450, PPC7450);
 PMC_CLASSDEP_TABLE(ppc970, PPC970);
 PMC_CLASSDEP_TABLE(e500, E500);
+PMC_CLASSDEP_TABLE(loongarch, LOONGARCH);
 
 static struct pmc_event_descr soft_event_table[PMC_EV_DYN_COUNT];
 
@@ -220,6 +225,9 @@ PMC_CLASS_TABLE_DESC(ibs, IBS, ibs, ibs);
 PMC_CLASS_TABLE_DESC(tsc, TSC, tsc, tsc);
 PMC_CLASS_TABLE_DESC(rapl, RAPL, rapl, rapl);
 PMC_CLASS_TABLE_DESC(perf, PERF, perf, perf);
+#endif
+#if defined(__loongarch__)
+PMC_CLASS_TABLE_DESC(loongarch, LOONGARCH, loongarch, loongarch);
 #endif
 #if	defined(__arm__)
 PMC_CLASS_TABLE_DESC(cortex_a8, ARMV7, cortex_a8, armv7);
@@ -972,6 +980,48 @@ armv7_allocate_pmc(enum pmc_event pe, char *ctrspec __unused,
 }
 #endif
 
+#if defined(__loongarch__)
+static struct pmc_event_alias loongarch_aliases[] = {
+	EV_ALIAS("cycles", "LOONGARCH-CPU_CYCLES"),
+	EV_ALIAS("instructions", "LOONGARCH-INSTRUCTIONS"),
+	EV_ALIAS("instructions-retired", "LOONGARCH-INSTRUCTIONS"),
+	EV_ALIAS("branches", "LOONGARCH-BRANCHES"),
+	EV_ALIAS("branch-misses", "LOONGARCH-BRANCH_MISSES"),
+	EV_ALIAS(NULL, NULL)
+};
+
+static int
+loongarch_allocate_pmc(enum pmc_event pe, char *ctrspec,
+	struct pmc_op_pmcallocate *config)
+{
+	char *p, *end;
+	unsigned long long code;
+	int raw = 0;
+
+	while ((p = strsep(&ctrspec, ",")) != NULL) {
+		if (KWMATCH(p, "os"))
+			config->pm_caps |= PMC_CAP_SYSTEM;
+		else if (KWMATCH(p, "usr"))
+			config->pm_caps |= PMC_CAP_USER;
+		else if (pe == PMC_EV_LOONGARCH_RAW &&
+		    KWPREFIXMATCH(p, "event=") && !raw) {
+			p += sizeof("event=") - 1;
+			if (*p == '\0' || *p == '-' || *p == '+')
+				return (-1);
+			errno = 0;
+			code = strtoull(p, &end, 0);
+			if (errno != 0 || end == p || *end != '\0' || code > 0x3ff)
+				return (-1);
+			config->pm_md.pm_md_config = code;
+			config->pm_flags |= PMC_F_EV_PMU;
+			raw = 1;
+		} else
+			return (-1);
+	}
+	return (pe == PMC_EV_LOONGARCH_RAW && !raw ? -1 : 0);
+}
+#endif
+
 #if	defined(__aarch64__)
 static struct pmc_event_alias cortex_a53_aliases[] = {
 	EV_ALIAS(NULL, NULL)
@@ -1471,6 +1521,10 @@ pmc_event_names_of_class(enum pmc_class cl, const char ***eventnames,
 
 	switch (cl)
 	{
+	case PMC_CLASS_LOONGARCH:
+		ev = loongarch_event_table;
+		count = PMC_EVENT_TABLE_SIZE(loongarch);
+		break;
 	case PMC_CLASS_IAF:
 		ev = iaf_event_table;
 		count = PMC_EVENT_TABLE_SIZE(iaf);
@@ -1712,6 +1766,11 @@ pmc_init(void)
 			break;
 #endif
 
+#if defined(__loongarch__)
+		case PMC_CLASS_LOONGARCH:
+			pmc_class_table[n++] = &loongarch_class_table_descr;
+			break;
+#endif
 		case PMC_CLASS_SOFT:
 			pmc_class_table[n++] = &soft_class_table_descr;
 			break;
@@ -1799,6 +1858,11 @@ pmc_init(void)
 #if defined(__amd64__) || defined(__i386__)
 	case PMC_CPU_AMD_K8:
 		PMC_MDEP_INIT(k8);
+		break;
+#endif
+#if defined(__loongarch__)
+	case PMC_CPU_LOONGARCH:
+		PMC_MDEP_INIT(loongarch);
 		break;
 #endif
 	case PMC_CPU_GENERIC:
@@ -1912,7 +1976,10 @@ _pmc_name_of_event(enum pmc_event pe, enum pmc_cputype cpu)
 	const struct pmc_event_descr *ev, *evfence;
 
 	ev = evfence = NULL;
-	if (pe >= PMC_EV_K8_FIRST && pe <= PMC_EV_K8_LAST) {
+	if (pe >= PMC_EV_LOONGARCH_FIRST && pe <= PMC_EV_LOONGARCH_LAST) {
+		ev = loongarch_event_table;
+		evfence = ev + PMC_EVENT_TABLE_SIZE(loongarch);
+	} else if (pe >= PMC_EV_K8_FIRST && pe <= PMC_EV_K8_LAST) {
 		ev = k8_event_table;
 		evfence = k8_event_table + PMC_EVENT_TABLE_SIZE(k8);
 	} else if (pe >= PMC_EV_IBS_FIRST && pe <= PMC_EV_IBS_LAST) {

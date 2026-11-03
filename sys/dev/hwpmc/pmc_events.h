@@ -43,6 +43,24 @@
  * __PMC_EV(CLASS, SYMBOLIC-NAME)
  *
  */
+/* Loongson PMU v1 named events; RAW requires an explicit 10-bit code. */
+#define __PMC_EV_LOONGARCH() \
+	__PMC_EV(LOONGARCH, CPU_CYCLES) \
+	__PMC_EV(LOONGARCH, INSTRUCTIONS) \
+	__PMC_EV(LOONGARCH, BRANCHES) \
+	__PMC_EV(LOONGARCH, BRANCH_MISSES) \
+	__PMC_EV(LOONGARCH, L1I_REFERENCES) \
+	__PMC_EV(LOONGARCH, L1I_MISSES) \
+	__PMC_EV(LOONGARCH, L1D_REFERENCES) \
+	__PMC_EV(LOONGARCH, L1D_MISSES) \
+	__PMC_EV(LOONGARCH, LL_REFERENCES) \
+	__PMC_EV(LOONGARCH, LL_MISSES) \
+	__PMC_EV(LOONGARCH, ITLB_MISSES) \
+	__PMC_EV(LOONGARCH, DTLB_MISSES) \
+	__PMC_EV(LOONGARCH, RAW)
+#define PMC_EV_LOONGARCH_FIRST PMC_EV_LOONGARCH_CPU_CYCLES
+#define PMC_EV_LOONGARCH_LAST PMC_EV_LOONGARCH_RAW
+
 /* timestamp counters. */
 #define        __PMC_EV_TSC()                                                  \
 	__PMC_EV(TSC, TSC)
@@ -2448,6 +2466,7 @@ __PMC_EV_ALIAS("unhalted-reference-cycles", IAF_CPU_CLK_UNHALTED_REF)
  * 0x14600	0x0100		ARM CMN-600 events
  * 0x14700	0x0100		AMD/Intel RAPL energy events
  * 0x14800	0x0100		AMD/Intel PERF MSRs events
+ * 0x14900	0x0100		LoongArch PMU events
  * 0x20000	0x1000		Software events
  */
 #define	__PMC_EVENTS()					\
@@ -2478,7 +2497,9 @@ __PMC_EV_ALIAS("unhalted-reference-cycles", IAF_CPU_CLK_UNHALTED_REF)
 	__PMC_EV_BLOCK(RAPL,		0x14700)	\
 	__PMC_EV_RAPL()					\
 	__PMC_EV_BLOCK(PERF,		0x14800)	\
-	__PMC_EV_PERF()
+	__PMC_EV_PERF()					\
+	__PMC_EV_BLOCK(LOONGARCH,	0x14900)	\
+	__PMC_EV_LOONGARCH()
 
 #define	PMC_EVENT_FIRST	PMC_EV_TSC_TSC
 #define	PMC_EVENT_LAST	PMC_EV_SOFT_LAST

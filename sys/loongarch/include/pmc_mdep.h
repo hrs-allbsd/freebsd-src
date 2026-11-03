@@ -31,6 +31,7 @@
 #include <dev/hwpmc/hwpmc_loongarch.h>
 
 union pmc_md_op_pmcallocate {
+	uint64_t		pm_md_config;
 	uint64_t		__pad[4];
 };
 
@@ -47,14 +48,9 @@ union pmc_md_pmc {
 	kstack_contains(curthread, (va), sizeof(va))
 #define	PMC_IN_KERNEL(va)	INKERNEL((va))
 #define	PMC_IN_USERSPACE(va)	((va) <= VM_MAXUSER_ADDRESS)
-#define	PMC_TRAPFRAME_TO_PC(TF)	((TF)->tf_ra)
-#define	PMC_TRAPFRAME_TO_FP(TF)	(0)	/* stub */
+#define	PMC_TRAPFRAME_TO_PC(TF)	((TF)->tf_era)
+#define	PMC_TRAPFRAME_TO_FP(TF)	((TF)->tf_fp)
 
-/*
- * Prototypes
- */
-struct pmc_mdep *pmc_loongarch_initialize(void);
-void	pmc_loongarch_finalize(struct pmc_mdep *_md);
 #endif /* _KERNEL */
 
 #endif /* !_MACHINE_PMC_MDEP_H_ */

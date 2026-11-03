@@ -44,6 +44,9 @@ SRCS+=	hwpmc_amd.c \
 	hwpmc_uncore.c \
 	hwpmc_x86.c
 
+.elif ${MACHINE_CPUARCH} == "loongarch"
+SRCS+=	hwpmc_loongarch.c
+
 .elif ${MACHINE_CPUARCH} == "powerpc"
 SRCS+=	hwpmc_e500.c \
 	hwpmc_mpc7xxx.c \
