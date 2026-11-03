@@ -388,6 +388,7 @@ static const struct {
 	{0x11841039, 0x00, "SiS 966",		0},
 	{0x11851039, 0x00, "SiS 968",		0},
 	{0x01861039, 0x00, "SiS 968",		0},
+	{0x7a080014, 0x00, "Loongson LS7A",	AHCI_Q_ABAR0},
 	{0xa01c177d, 0x00, "ThunderX",		AHCI_Q_ABAR0|AHCI_Q_1MSI},
 	{0x00311c36, 0x00, "Annapurna",		AHCI_Q_FORCE_PI|AHCI_Q_RESTORE_CAP|AHCI_Q_NOMSIX},
 	{0x1600144d, 0x00, "Samsung",		AHCI_Q_NOMSI},
@@ -510,7 +511,7 @@ ahci_pci_attach(device_t dev)
 	ctlr->subvendorid = pci_get_subvendor(dev);
 	ctlr->subdeviceid = pci_get_subdevice(dev);
 
-	/* Default AHCI Base Address is BAR(5), Cavium uses BAR(0) */
+	/* Default AHCI Base Address is BAR(5); Cavium and LS7A use BAR(0). */
 	if (ctlr->quirks & AHCI_Q_ABAR0)
 		ctlr->r_rid = PCIR_BAR(0);
 	else

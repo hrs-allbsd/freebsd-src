@@ -557,13 +557,38 @@ ehci_pci_take_controller(device_t self)
 	uint16_t to;
 	uint8_t eecp;
 	uint8_t bios_sem;
+	uint64_t visited = 0;
 
 	cparams = EREAD4(sc, EHCI_HCCPARAMS);
+	if (bootverbose)
+		device_printf(self, "HCCPARAMS=0x%08x\n", cparams);
+	/* LS7A advertises EECP 0xa0 without implementing the PCI registers. */
+	if (pci_get_devid(self) == 0x7a140014) {
+		if (bootverbose)
+			device_printf(self,
+			    "ignoring unimplemented LS7A extended capabilities\n");
+		return (0);
+	}
 
 	/* Synchronise with the BIOS if it owns the controller. */
 	for (eecp = EHCI_HCC_EECP(cparams); eecp != 0;
 	    eecp = EHCI_EECP_NEXT(eec)) {
+		/* PCI capabilities must be aligned and may not form a cycle. */
+		if (eecp < 0x40 || (eecp & 3) != 0 ||
+		    (visited & (1ULL << (eecp / 4))) != 0) {
+			device_printf(self,
+			    "invalid extended capability chain at 0x%02x\n", eecp);
+			break;
+		}
+		visited |= 1ULL << (eecp / 4);
 		eec = pci_read_config(self, eecp, 4);
+		if (bootverbose)
+			device_printf(self, "EECP 0x%02x=0x%08x\n", eecp, eec);
+		if (eec == 0xffffffff) {
+			device_printf(self,
+			    "unavailable extended capability at 0x%02x\n", eecp);
+			break;
+		}
 		if (EHCI_EECP_ID(eec) != EHCI_EC_LEGSUP) {
 			continue;
 		}

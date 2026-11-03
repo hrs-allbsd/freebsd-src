@@ -32,6 +32,7 @@
 
 #include <sys/cdefs.h>
 #include <dev/isci/isci.h>
+#if defined(__i386__) || defined(__amd64__)
 #include <vm/vm.h>
 #include <vm/pmap.h>
 #include <machine/vmparam.h>
@@ -82,10 +83,12 @@ struct oem_parameters_table
 	uint16_t	reserved2;
 	uint8_t		data[1];
 };
+#endif
 
 void
 isci_get_oem_parameters(struct isci_softc *isci)
 {
+#if defined(__i386__) || defined(__amd64__)
 	uint32_t OROM_PHYSICAL_ADDRESS_START = 0xC0000;
 	uint32_t OROM_SEARCH_LENGTH = 0x30000;
 	uint16_t OROM_SIGNATURE = 0xAA55;
@@ -172,4 +175,8 @@ isci_get_oem_parameters(struct isci_softc *isci)
 
 		offset += OROM_SIZE;
 	}
+#else
+	/* The legacy PC option-ROM window is not mapped on other platforms. */
+	isci->oem_parameters_found = FALSE;
+#endif
 }

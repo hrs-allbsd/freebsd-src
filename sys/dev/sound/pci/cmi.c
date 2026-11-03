@@ -778,21 +778,24 @@ MIXER_DECLARE(cmi_mixer);
  */
 
 static unsigned char
-cmi_mread(struct mpu401 *arg, void *sc, int reg)
+cmi_mread(struct mpu401 *arg, void *cookie, int reg)
 {
+	struct sc_info *sc = cookie;
 	unsigned int d;
 
-		d = bus_space_read_1(0,0, 0x330 + reg);
+	/* Use the MPU aperture in the allocated PCI register resource. */
+	d = cmi_rd(sc, CMPCI_REG_MPU_BASE + reg, 1);
 	/*	printf("cmi_mread: reg %x %x\n",reg, d);
 	*/
 	return d;
 }
 
 static void
-cmi_mwrite(struct mpu401 *arg, void *sc, int reg, unsigned char b)
+cmi_mwrite(struct mpu401 *arg, void *cookie, int reg, unsigned char b)
 {
+	struct sc_info *sc = cookie;
 
-	bus_space_write_1(0,0,0x330 + reg , b);
+	cmi_wr(sc, CMPCI_REG_MPU_BASE + reg, b, 1);
 }
 
 static int

@@ -40,8 +40,12 @@
 
 #define IAVF_RXQ_CTX_DBUFF_SHIFT	7
 
+#ifndef BIT
 #define BIT(a) (1UL << (a))
+#endif
+#ifndef BIT_ULL
 #define BIT_ULL(a) (1ULL << (a))
+#endif
 
 #ifndef IAVF_MASK
 /* IAVF_MASK is a macro used on 32 bit registers */

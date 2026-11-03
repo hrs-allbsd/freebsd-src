@@ -43,8 +43,12 @@
 #include "i40e_devids.h"
 
 
+#ifndef BIT
 #define BIT(a) (1UL << (a))
+#endif
+#ifndef BIT_ULL
 #define BIT_ULL(a) (1ULL << (a))
+#endif
 
 #ifndef I40E_MASK
 /* I40E_MASK is a macro used on 32 bit registers */
