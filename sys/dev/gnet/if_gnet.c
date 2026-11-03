@@ -192,13 +192,24 @@ static int
 media_change(if_t ifp)
 {
 	struct gnet_softc *sc = iflib_get_softc(if_getsoftc(ifp));
+	/* The selected media is applied by init() when the device is ready. */
+	if (sc->miibus == NULL || !sc->running)
+		return (0);
 	return (mii_mediachg(device_get_softc(sc->miibus)));
 }
 static void
 media_status(if_t ifp, struct ifmediareq *req)
 {
 	struct gnet_softc *sc = iflib_get_softc(if_getsoftc(ifp));
-	struct mii_data *mii = device_get_softc(sc->miibus);
+	struct mii_data *mii;
+
+	/* MII polling also publishes link changes through the MII bus. */
+	if (sc->miibus == NULL || !sc->running) {
+		req->ifm_status = IFM_AVALID;
+		req->ifm_active = IFM_ETHER | IFM_NONE;
+		return;
+	}
+	mii = device_get_softc(sc->miibus);
 	mii_pollstat(mii);
 	req->ifm_status = mii->mii_media_status;
 	req->ifm_active = mii->mii_media_active;
