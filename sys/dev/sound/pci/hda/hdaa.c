@@ -1424,8 +1424,16 @@ hdaa_widget_connection_parse(struct hdaa_widget *w)
 
 	w->nconns = 0;
 
+	if (!HDA_PARAM_AUDIO_WIDGET_CAP_CONN_LIST(w->param.widget_cap))
+		return;
+
 	res = hda_command(w->devinfo->dev,
 	    HDA_CMD_GET_PARAMETER(0, nid, HDA_PARAM_CONN_LIST_LENGTH));
+	if (res == HDA_INVALID) {
+		device_printf(w->devinfo->dev,
+		    "Invalid connection list length at nid=%d; ignoring\n", nid);
+		return;
+	}
 
 	ents = HDA_PARAM_CONN_LIST_LENGTH_LIST_LENGTH(res);
 
@@ -1445,6 +1453,13 @@ hdaa_widget_connection_parse(struct hdaa_widget *w)
 	for (i = 0; i < ents; i += entnum) {
 		res = hda_command(w->devinfo->dev,
 		    HDA_CMD_GET_CONN_LIST_ENTRY(0, nid, i));
+		if (res == HDA_INVALID) {
+			device_printf(w->devinfo->dev,
+			    "Invalid connection list at nid=%d index=%d; ignoring\n",
+			    nid, i);
+			w->nconns = 0;
+			return;
+		}
 		for (j = 0; j < entnum; j++) {
 			cnid = CONN_CNID(res, entnum, j);
 			if (cnid == 0) {
