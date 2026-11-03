@@ -340,6 +340,25 @@ pci_host_generic_acpi_init(device_t dev)
 	error = pci_host_acpi_get_ecam_resource(dev);
 	if (error != 0)
 		return (error);
+#ifdef __loongarch__
+	/*
+	 * Some Loongson firmware describes only the first 64 KiB of the
+	 * LS7A PCI I/O aperture, despite assigning bridge windows above
+	 * it.  The chipset decodes 32 MiB at 0x18000000.  Correct only
+	 * this truncated aperture on hosts with the Loongson layout.
+	 */
+	if ((sc->base.quirks & PCIE_ECAM_LOONGSON_QUIRK) != 0) {
+		for (int i = 0; i < sc->base.nranges; i++) {
+			struct pcie_range *range = &sc->base.ranges[i];
+
+			if (FLAG_TYPE(range->flags) == FLAG_TYPE_IO &&
+			    range->pci_base == 0 &&
+			    range->phys_base == 0x18000000 &&
+			    range->size == 0x10000)
+				range->size = 0x2000000;
+		}
+	}
+#endif
 	acpi_pcib_fetch_prt(dev, &sc->ap_prt);
 
 	error = pci_host_generic_core_attach(dev);
