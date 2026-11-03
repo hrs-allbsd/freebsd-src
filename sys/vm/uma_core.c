@@ -1008,7 +1008,7 @@ cache_bucket_load_free(uma_cache_t cache, uma_bucket_t b)
 }
 
 #ifdef NUMA
-static inline void 
+static inline void
 cache_bucket_load_cross(uma_cache_t cache, uma_bucket_t b)
 {
 
@@ -2051,7 +2051,7 @@ noobj_alloc(uma_zone_t zone, vm_size_t bytes, int domain, uint8_t *flags,
 		 */
 		TAILQ_FOREACH_SAFE(p, &alloctail, plinks.q, p_next) {
 			vm_page_unwire_noq(p);
-			vm_page_free(p); 
+			vm_page_free(p);
 		}
 		return (NULL);
 	}
@@ -2929,7 +2929,7 @@ zone_ctor(void *mem, int size, void *udata, int flags)
 	 */
 	zone->uz_import = zone_import;
 	zone->uz_release = zone_release;
-	zone->uz_arg = zone; 
+	zone->uz_arg = zone;
 	keg = arg->keg;
 
 	if (arg->flags & UMA_ZONE_SECONDARY) {
@@ -5885,7 +5885,7 @@ uma_dbg_alloc(uma_zone_t zone, uma_slab_t slab, void *item)
 
 	if (slab == NULL) {
 		slab = uma_dbg_getslab(zone, item);
-		if (slab == NULL) 
+		if (slab == NULL)
 			panic("uma: item %p did not belong to zone %s",
 			    item, zone->uz_name);
 	}
@@ -5911,7 +5911,7 @@ uma_dbg_free(uma_zone_t zone, uma_slab_t slab, void *item)
 
 	if (slab == NULL) {
 		slab = uma_dbg_getslab(zone, item);
-		if (slab == NULL) 
+		if (slab == NULL)
 			panic("uma: Freed item %p did not belong to zone %s",
 			    item, zone->uz_name);
 	}

@@ -513,7 +513,7 @@ link_elf_link_preload(linker_class_t cls, const char *filename,
 			if (ef->shstrtab && shdr[i].sh_name != 0)
 				ef->progtab[pb].name =
 				    ef->shstrtab + shdr[i].sh_name;
-			if (ef->progtab[pb].name != NULL && 
+			if (ef->progtab[pb].name != NULL &&
 			    !strcmp(ef->progtab[pb].name, DPCPU_SETNAME)) {
 				void *dpcpu;
 
@@ -1103,7 +1103,7 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 #endif
 			else
 				ef->progtab[pb].name = "<<NOBITS>>";
-			if (ef->progtab[pb].name != NULL && 
+			if (ef->progtab[pb].name != NULL &&
 			    !strcmp(ef->progtab[pb].name, DPCPU_SETNAME)) {
 				ef->progtab[pb].origaddr =
 				    (void *)(uintptr_t)mapbase;

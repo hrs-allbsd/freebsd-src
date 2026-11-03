@@ -166,25 +166,25 @@ static struct pmc_event_descr soft_event_table[PMC_EV_DYN_COUNT];
  * rather than duplicating for each core.
  */
 
-static const struct pmc_event_descr cortex_a8_event_table[] = 
+static const struct pmc_event_descr cortex_a8_event_table[] =
 {
 	__PMC_EV_ALIAS_ARMV7_CORTEX_A8()
 	__PMC_EV_ARMV7()
 };
 
-static const struct pmc_event_descr cortex_a9_event_table[] = 
+static const struct pmc_event_descr cortex_a9_event_table[] =
 {
 	__PMC_EV_ALIAS_ARMV7_CORTEX_A9()
 	__PMC_EV_ARMV7()
 };
 
-static const struct pmc_event_descr cortex_a53_event_table[] = 
+static const struct pmc_event_descr cortex_a53_event_table[] =
 {
 	__PMC_EV_ALIAS_ARMV8_CORTEX_A53()
 	__PMC_EV_ARMV8()
 };
 
-static const struct pmc_event_descr cortex_a57_event_table[] = 
+static const struct pmc_event_descr cortex_a57_event_table[] =
 {
 	__PMC_EV_ALIAS_ARMV8_CORTEX_A57()
 	__PMC_EV_ARMV8()
@@ -1226,7 +1226,7 @@ powerpc_allocate_pmc(enum pmc_event pe, char *ctrspec __unused,
 	(void) pe;
 
 	pmc_config->pm_caps |= (PMC_CAP_READ | PMC_CAP_WRITE);
-	
+
 	while ((p = strsep(&ctrspec, ",")) != NULL) {
 		if (KWMATCH(p, POWERPC_KW_OS))
 			pmc_config->pm_caps |= PMC_CAP_SYSTEM;

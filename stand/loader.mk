@@ -2,8 +2,8 @@
 
 CFLAGS+=-I${LDRSRC}
 
-SRCS+=	boot.c commands.c console.c devopen.c interp.c 
-SRCS+=	interp_backslash.c interp_parse.c ls.c misc.c 
+SRCS+=	boot.c commands.c console.c devopen.c interp.c
+SRCS+=	interp_backslash.c interp_parse.c ls.c misc.c
 SRCS+=	modinfo.c
 SRCS+=	module.c nvstore.c pnglite.c tslog.c
 

@@ -873,7 +873,7 @@ sched_priority(struct thread *td, u_char prio)
 		KTR_POINT3(KTR_SCHED, "thread", sched_tdname(curthread),
 		    "lend prio", "prio:%d", td->td_priority, "new prio:%d",
 		    prio, KTR_ATTR_LINKED, sched_tdname(td));
-		SDT_PROBE4(sched, , , lend__pri, td, td->td_proc, prio, 
+		SDT_PROBE4(sched, , , lend__pri, td, td->td_proc, prio,
 		    curthread);
 	}
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
@@ -1047,7 +1047,7 @@ sched_4bsd_switch(struct thread *td, int flags)
 		}
 	}
 
-	/* 
+	/*
 	 * Switch to the sched lock to fix things up and pick
 	 * a new thread.  Block the td_lock in order to avoid
 	 * breaking the critical path.
@@ -1341,7 +1341,7 @@ sched_4bsd_add(struct thread *td, int flags)
 	    sched_tdname(curthread));
 	KTR_POINT1(KTR_SCHED, "thread", sched_tdname(curthread), "wokeup",
 	    KTR_ATTR_LINKED, sched_tdname(td));
-	SDT_PROBE4(sched, , , enqueue, td, td->td_proc, NULL, 
+	SDT_PROBE4(sched, , , enqueue, td, td->td_proc, NULL,
 	    flags & SRQ_PREEMPTED);
 
 	/*
@@ -1436,7 +1436,7 @@ sched_4bsd_add(struct thread *td, int flags)
 	    sched_tdname(curthread));
 	KTR_POINT1(KTR_SCHED, "thread", sched_tdname(curthread), "wokeup",
 	    KTR_ATTR_LINKED, sched_tdname(td));
-	SDT_PROBE4(sched, , , enqueue, td, td->td_proc, NULL, 
+	SDT_PROBE4(sched, , , enqueue, td, td->td_proc, NULL,
 	    flags & SRQ_PREEMPTED);
 
 	/*
@@ -1759,7 +1759,7 @@ sched_4bsd_tdname(struct thread *td)
 		snprintf(ts->ts_name, sizeof(ts->ts_name),
 		    "%s tid %d", td->td_name, td->td_tid);
 	return (ts->ts_name);
-#else   
+#else
 	return (td->td_name);
 #endif
 }
@@ -1782,7 +1782,7 @@ sched_4bsd_affinity(struct thread *td)
 	struct td_sched *ts;
 	int cpu;
 
-	THREAD_LOCK_ASSERT(td, MA_OWNED);	
+	THREAD_LOCK_ASSERT(td, MA_OWNED);
 
 	/*
 	 * Set the TSF_AFFINITY flag if there is at least one CPU this

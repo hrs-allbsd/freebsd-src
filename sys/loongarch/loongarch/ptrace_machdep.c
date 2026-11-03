@@ -90,4 +90,3 @@ ptrace_clear_single_step(struct thread *td)
 	td->td_md.md_ss_active = 0;
 	return (0);
 }
-

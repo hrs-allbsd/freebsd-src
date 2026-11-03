@@ -2113,7 +2113,7 @@ pmap_growkernel_nopanic(vm_offset_t addr)
 		kernel_vm_end = (kernel_vm_end + L2_SIZE) & ~L2_OFFSET;
 		if (kernel_vm_end - 1 >= vm_map_max(kernel_map)) {
 			kernel_vm_end = vm_map_max(kernel_map);
-			break;                       
+			break;
 		}
 	}
 	return (KERN_SUCCESS);
@@ -2211,7 +2211,7 @@ free_pv_chunk(struct pv_chunk *pc)
 	vm_page_t m;
 
 	mtx_lock(&pv_chunks_mutex);
- 	TAILQ_REMOVE(&pv_chunks, pc, pc_lru);
+	TAILQ_REMOVE(&pv_chunks, pc, pc_lru);
 	mtx_unlock(&pv_chunks_mutex);
 	PV_STAT(atomic_subtract_int(&pv_entry_spare, _NPCPV));
 	PV_STAT(atomic_subtract_int(&pc_chunk_count, 1));
@@ -4427,7 +4427,7 @@ pmap_zero_page(vm_page_t m)
 }
 
 /*
- *	pmap_zero_page_area zeros the specified hardware page by mapping 
+ *	pmap_zero_page_area zeros the specified hardware page by mapping
  *	the page into KVM and using bzero to clear its contents.
  *
  *	off and size may not cover an area beyond a single hardware page.

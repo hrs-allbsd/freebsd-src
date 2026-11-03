@@ -51,4 +51,3 @@ ENTRY(_start)
 
 END(_start)
 	.section .note.GNU-stack,"",%progbits
-
