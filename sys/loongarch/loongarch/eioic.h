@@ -26,6 +26,8 @@ struct eioic_softc {
 	struct eioic_irqsrc	isrcs[EIOINTC_MAX_IRQS];
 	u_int			vec_count;
 	struct mtx		mtx;
+	uint32_t		enabled[8];
+	uint16_t		nodes;
 };
 
 /*
@@ -33,5 +35,6 @@ struct eioic_softc {
  * Used by child PICs (PCH-PIC) that reference EIOINTC ISRCs, and by AP init.
  */
 struct eioic_softc *eioic_get_softc(void);
+int eiointc_bind_vector(device_t, u_int, struct intr_irqsrc *);
 
 #endif /* !_LOONGARCH_EIOIC_H_ */

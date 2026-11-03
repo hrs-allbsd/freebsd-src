@@ -588,10 +588,23 @@ pch_pic_post_filter(device_t dev, struct intr_irqsrc *isrc)
 	pch_pic_post_ithread(dev, isrc);
 }
 
+static int
+pch_pic_bind_intr(device_t dev, struct intr_irqsrc *isrc)
+{
+	struct pch_pic_softc *sc = device_get_softc(dev);
+	struct eioic_softc *parent = eioic_get_softc();
+
+	if (parent == NULL)
+		return (ENXIO);
+	return (eiointc_bind_vector(parent->dev,
+	    sc->vec_base + ((struct pch_pic_irqsrc *)isrc)->irq, isrc));
+}
+
 static device_method_t pch_pic_methods[] = {
 	DEVMETHOD(device_probe,		pch_pic_probe),
 	DEVMETHOD(device_attach,	pch_pic_attach),
 
+	DEVMETHOD(pic_bind_intr,		pch_pic_bind_intr),
 	DEVMETHOD(pic_disable_intr,	pch_pic_disable_intr),
 	DEVMETHOD(pic_enable_intr,	pch_pic_enable_intr),
 	DEVMETHOD(pic_map_intr,		pch_pic_map_intr),

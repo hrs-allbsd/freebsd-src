@@ -25,6 +25,7 @@
 #include <sys/module.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
+#include <sys/pcpu.h>
 #include <sys/types.h>
 #include <sys/smp.h>
 #include <sys/rman.h>
@@ -51,6 +52,21 @@
  * node).
  */
 #define	EIOIC_INTR_XREF		((phandle_t)2)
+
+/* ANY_Send: data[63:32], wait[31], byte inhibit[30:27], CPU[25:16]. */
+#define EIOIC_ANY_SEND	0x1158
+#define EIOIC_CORES_PER_NODE	4
+
+static void
+eioic_node_write(u_int node, u_int reg, uint32_t data, u_int inhibit)
+{
+	uint64_t command;
+
+	command = ((uint64_t)data << 32) | (1ULL << 31) |
+	    ((uint64_t)inhibit << 27) |
+	    ((uint64_t)(node * EIOIC_CORES_PER_NODE) << 16) | reg;
+	iocsr_write64(command, EIOIC_ANY_SEND);
+}
 
 static device_t eioic_dev;	/* single-instance guard */
 
@@ -89,13 +105,9 @@ eioic_init_router(int vec_count)
 	 * real 3A6000 does not.
 	 */
 
-	/*
-	 * Keep the node-0/node-1 selector pair used by the validated UP
-	 * configuration. All vector ROUTE entries below select node 0,
-	 * core 0; routing to other nodes is outside this bring-up target.
-	 */
-	for (i = 0; i < ngroups; i++)
-		iocsr_write32(0x00020001,
+	/* Each route's high nibble selects one of 16 node bitmaps. */
+	for (i = 0; i < 8; i++)
+		iocsr_write32((1U << (2 * i)) | (1U << (2 * i + 17)),
 		    LOONGARCH_IOCSR_EXTIOI_NODEMAP_BASE + i * 4);
 
 	/*
@@ -136,29 +148,30 @@ eioic_init_router(int vec_count)
 	}
 }
 
+/* Caller holds the controller lock. */
+static void
+eioic_write_enable(struct eioic_softc *sc, u_int group)
+{
+	u_int node;
+
+	for (node = 0; node < 16; node++) {
+		if ((sc->nodes & (1U << node)) != 0)
+			eioic_node_write(node,
+			    LOONGARCH_IOCSR_EXTIOI_EN_BASE + group * 4,
+			    sc->enabled[group], 0);
+	}
+}
+
 void
 eiointc_enable_vector(device_t dev, u_int vector)
 {
 	struct eioic_softc *sc = device_get_softc(dev);
-	uint32_t reg, bit, val;
 
 	if (vector >= sc->vec_count)
 		return;
-
 	mtx_lock_spin(&sc->mtx);
-	/*
-	 * Set the ENABLE bit only.  BOUNCE is left untouched: it is
-	 * initialized once in eioic_init_router() and should not be
-	 * toggled.  Clearing BOUNCE on disable would discard edge-
-	 * triggered interrupts that arrived while the vector was
-	 * masked; setting it on enable would force edge-triggered
-	 * behavior on level-triggered sources.
-	 */
-	reg = LOONGARCH_IOCSR_EXTIOI_EN_BASE + (vector / 32) * 4;
-	bit = vector % 32;
-	val = iocsr_read32(reg);
-	val |= (1U << bit);
-	iocsr_write32(val, reg);
+	sc->enabled[vector / 32] |= 1U << (vector % 32);
+	eioic_write_enable(sc, vector / 32);
 	mtx_unlock_spin(&sc->mtx);
 }
 
@@ -166,19 +179,94 @@ void
 eiointc_disable_vector(device_t dev, u_int vector)
 {
 	struct eioic_softc *sc = device_get_softc(dev);
-	uint32_t reg, bit, val;
 
 	if (vector >= sc->vec_count)
 		return;
+	mtx_lock_spin(&sc->mtx);
+	sc->enabled[vector / 32] &= ~(1U << (vector % 32));
+	eioic_write_enable(sc, vector / 32);
+	mtx_unlock_spin(&sc->mtx);
+}
+
+int
+eiointc_bind_vector(device_t dev, u_int vector, struct intr_irqsrc *isrc)
+{
+	struct eioic_softc *sc = device_get_softc(dev);
+	cpuset_t eligible;
+	struct pcpu *pc;
+	uint32_t enabled, route;
+	u_int cpu, hwid, node, target, shift, i;
+
+	if (vector >= sc->vec_count)
+		return (EINVAL);
+	/* Keep unbound vectors on the boot CPU; honor explicit affinity. */
+	if (CPU_EMPTY(&isrc->isrc_cpu))
+		cpu = 0;
+	else {
+		CPU_AND(&eligible, &isrc->isrc_cpu, &all_cpus);
+		if (CPU_EMPTY(&eligible))
+			return (EINVAL);
+		cpu = CPU_FFS(&eligible) - 1;
+	}
+	pc = pcpu_find(cpu);
+	if (pc == NULL)
+		return (EINVAL);
+	hwid = pc->pc_hwid;
+	target = hwid / EIOIC_CORES_PER_NODE;
+	if (target >= 16)
+		return (EINVAL);
 
 	mtx_lock_spin(&sc->mtx);
-	/* Clear only ENABLE; BOUNCE is left untouched. */
-	reg = LOONGARCH_IOCSR_EXTIOI_EN_BASE + (vector / 32) * 4;
-	bit = vector % 32;
-	val = iocsr_read32(reg);
-	val &= ~(1U << bit);
-	iocsr_write32(val, reg);
+	if ((sc->nodes & (1U << target)) == 0) {
+		/* Initialize a new node without resetting the live router. */
+		for (i = 0; i < 8; i++) {
+			eioic_node_write(target,
+			    LOONGARCH_IOCSR_EXTIOI_NODEMAP_BASE + i * 4,
+			    (1U << (2 * i)) | (1U << (2 * i + 17)), 0);
+			eioic_node_write(target,
+			    LOONGARCH_IOCSR_EXTIOI_EN_BASE + i * 4, 0, 0);
+			eioic_node_write(target,
+			    LOONGARCH_IOCSR_EXTIOI_BOUNCE_BASE + i * 4, 0, 0);
+		}
+		for (i = 0; i < 2; i++)
+			eioic_node_write(target,
+			    LOONGARCH_IOCSR_EXTIOI_IPMAP_BASE + i * 4,
+			    0x02020202, 0);
+		/* Existing vectors still belong to the boot node. */
+		for (i = 0; i < sc->vec_count / 4; i++)
+			eioic_node_write(target,
+			    LOONGARCH_IOCSR_EXTIOI_ROUTE_BASE + i * 4,
+			    ((target << 4) | 1U) * 0x01010101U, 0);
+		sc->nodes |= 1U << target;
+		for (i = 0; i < 8; i++)
+			eioic_write_enable(sc, i);
+	}
+	enabled = sc->enabled[vector / 32];
+	sc->enabled[vector / 32] &= ~(1U << (vector % 32));
+	eioic_write_enable(sc, vector / 32);
+	shift = (vector % 4) * 8;
+	for (node = 0; node < 16; node++) {
+		if ((sc->nodes & (1U << node)) == 0)
+			continue;
+		route = ((node == 0 ? target : node) << 4) |
+		    (1U << (hwid % EIOIC_CORES_PER_NODE));
+		eioic_node_write(node,
+		    LOONGARCH_IOCSR_EXTIOI_ROUTE_BASE + (vector & ~3U),
+		    route << shift, 0xf ^ (1U << (vector % 4)));
+	}
+	sc->enabled[vector / 32] = enabled;
+	eioic_write_enable(sc, vector / 32);
+	CPU_SETOF(cpu, &isrc->isrc_cpu);
 	mtx_unlock_spin(&sc->mtx);
+	return (0);
+}
+
+static int
+eioic_bind_intr(device_t dev, struct intr_irqsrc *isrc)
+{
+
+	return (eiointc_bind_vector(dev,
+	    ((struct eioic_irqsrc *)isrc)->vec, isrc));
 }
 
 static int
@@ -294,6 +382,9 @@ eioic_attach(device_t dev)
 
 	eiointc_enable_extioi();
 	eioic_init_router(sc->vec_count);
+	sc->nodes = 1;
+	for (irq = 0; irq < nitems(sc->enabled); irq++)
+		sc->enabled[irq] = UINT32_MAX;
 
 	isrcs = sc->isrcs;
 	name = device_get_nameunit(dev);
@@ -434,6 +525,7 @@ static device_method_t eioic_methods[] = {
 	DEVMETHOD(device_attach,	eioic_attach),
 
 	/* PIC interface */
+	DEVMETHOD(pic_bind_intr,		eioic_bind_intr),
 	DEVMETHOD(pic_disable_intr,	eioic_disable_intr),
 	DEVMETHOD(pic_enable_intr,	eioic_enable_intr),
 	DEVMETHOD(pic_map_intr,		eioic_map_intr),

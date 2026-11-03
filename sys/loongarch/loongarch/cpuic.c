@@ -149,12 +149,11 @@ cpuic_attach(device_t dev)
 		if (i == IRQ_IPI)
 			flags |= INTR_ISRCF_IPI;
 		/*
-		 * Only per-CPU interrupts (timer, PMC, IPI) are PPIs.
-		 * HWI0-7 are shared — e.g., HWI0 carries all EIOINTC
-		 * device interrupts and must NOT be dispatched on
-		 * multiple CPUs simultaneously.
+		 * HWI1 is the CPU-local EIOINTC cascade.  Each external
+		 * vector is routed to one CPU, but every CPU must unmask
+		 * its cascade pin to receive vectors assigned to it.
 		 */
-		if (i == IRQ_TI || i == IRQ_PCOV)
+		if (i == IRQ_TI || i == IRQ_PCOV || i == IRQ_HWI1)
 			flags |= INTR_ISRCF_PPI;
 		error = intr_isrc_register(&isrcs[i].isrc, sc->dev, flags,
 		    "%s,%u", name, i);

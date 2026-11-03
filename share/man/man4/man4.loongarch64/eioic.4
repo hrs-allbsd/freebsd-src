@@ -54,8 +54,15 @@ either of the following compatible strings:
 .Qq loongson,ls2k2000-eiointc
 .El
 .Pp
+External interrupts can be assigned to a CPU with
+.Xr cpuset 1 .
+The driver translates logical CPU numbers to hardware node and core
+routing fields.
+Unbound vectors remain on the boot CPU.
+.Pp
 No driver-specific kernel configuration directive is required.
 .Sh SEE ALSO
+.Xr cpuset 1 ,
 .Xr acpi 4 ,
 .Xr cpuic 4 ,
 .Xr fdt 4 ,

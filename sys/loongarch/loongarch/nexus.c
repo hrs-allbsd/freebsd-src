@@ -97,6 +97,9 @@ static bus_get_rman_t		nexus_get_rman;
 static bus_map_resource_t	nexus_map_resource;
 static bus_unmap_resource_t	nexus_unmap_resource;
 
+#ifdef SMP
+static bus_bind_intr_t		nexus_bind_intr;
+#endif
 static bus_config_intr_t	nexus_config_intr;
 static bus_describe_intr_t	nexus_describe_intr;
 static bus_setup_intr_t		nexus_setup_intr;
@@ -139,6 +142,9 @@ static device_method_t nexus_methods[] = {
 	DEVMETHOD(bus_release_resource, bus_generic_rman_release_resource),
 	DEVMETHOD(bus_set_resource,	bus_generic_rl_set_resource),
 	DEVMETHOD(bus_unmap_resource,	nexus_unmap_resource),
+#ifdef SMP
+	DEVMETHOD(bus_bind_intr,		nexus_bind_intr),
+#endif
 	DEVMETHOD(bus_config_intr,	nexus_config_intr),
 	DEVMETHOD(bus_describe_intr,	nexus_describe_intr),
 	DEVMETHOD(bus_setup_intr,	nexus_setup_intr),
@@ -324,6 +330,16 @@ nexus_alloc_resource(device_t bus, device_t child, int type, int rid,
 	return (bus_generic_rman_alloc_resource(bus, child, type, rid,
 	    start, end, count, flags));
 }
+
+#ifdef SMP
+static int
+nexus_bind_intr(device_t dev, device_t child, struct resource *irq,
+    int cpu)
+{
+
+	return (intr_bind_irq(child, irq, cpu));
+}
+#endif
 
 static int
 nexus_config_intr(device_t dev, int irq, enum intr_trigger trig,
