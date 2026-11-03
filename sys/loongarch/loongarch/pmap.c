@@ -291,6 +291,18 @@ SYSCTL_INT(_vm_pmap, OID_AUTO, tlb_ipi_threshold, CTLFLAG_RWTUN,
     &pmap_tlb_ipi_threshold, 0,
     "Page count above which pmap_remove coalesces TLB invalidations");
 
+static u_long pmap_dmap_faults;
+SYSCTL_ULONG(_vm_pmap, OID_AUTO, dmap_faults, CTLFLAG_RD,
+    &pmap_dmap_faults, 0, "Recovered faults on valid direct-map translations");
+
+/* Use the software refill path unless hardware walking is requested. */
+static int pmap_hw_ptw;
+SYSCTL_INT(_vm_pmap, OID_AUTO, ptw, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
+    &pmap_hw_ptw, 0, "Enable the hardware page-table walker on capable CPUs");
+static u_int pmap_hw_ptw_active;
+SYSCTL_UINT(_vm_pmap, OID_AUTO, ptw_active_cpus, CTLFLAG_RD,
+    &pmap_hw_ptw_active, 0, "CPUs initialized with hardware page-table walking");
+
 static u_long pmap_l2_p_failures;
 SYSCTL_ULONG(_vm_pmap_l2, OID_AUTO, p_failures, CTLFLAG_RD,
     &pmap_l2_p_failures, 0,
@@ -450,8 +462,9 @@ pmap_pte_sync(volatile pt_entry_t *pte)
 	})
 #define	pmap_load_clear(pte)		pmap_load_store(pte, 0)
 #define	pmap_load(pte)			atomic_load_64(pte)
+/* Order child-table initialization before publishing a parent entry. */
 #define	pmap_store(pte, entry)		do { \
-	atomic_store_64(pte, entry); \
+	atomic_store_rel_64(pte, entry); \
 	pmap_pte_sync(pte); \
 	} while (0)
 #define	pmap_store_bits(pte, bits)	do { \
@@ -841,7 +854,7 @@ pmap_bootstrap(vm_offset_t pgd, vm_paddr_t kernstart, vm_size_t kernlen)
 {
 	vm_paddr_t physmap[PHYS_AVAIL_ENTRIES];
 	vm_offset_t dpcpu, freemempos, msgbufpv;
-	vm_paddr_t max_pa, min_pa;
+	vm_paddr_t max_pa, min_pa, bootmem_end;
 	u_int l1_slot, l2_slot;
 	u_int physmap_idx;
 	int i;
@@ -977,11 +990,12 @@ pmap_bootstrap(vm_offset_t pgd, vm_paddr_t kernstart, vm_size_t kernlen)
 	/* Allocate memory for the msgbuf, e.g. for /sbin/dmesg */
 	alloc_pages(msgbufpv, round_page(msgbufsize) / PAGE_SIZE);
 	msgbufp = (void *)msgbufpv;
+	bootmem_end = pmap_early_vtophys(l1, freemempos - 1) + 1;
 
 	virtual_avail = KERNBASE + LA_KMOD_VA_SKIP;
 
-	/* clear 2M mappings after kernel image setup by locore */
-	for (va = roundup2(KERNBASE + kernlen, L2_SIZE);
+	/* Keep the image and all bootstrap allocations mapped. */
+	for (va = roundup2(freemempos, L2_SIZE);
 			va < virtual_avail; va += L2_SIZE) {
 		pd_entry_t *l2 = pmap_l2(kernel_pmap, va);
 		if (l2 != NULL && (pmap_pmd_entry(l2) & PTE_HUGE) != 0)
@@ -991,8 +1005,7 @@ pmap_bootstrap(vm_offset_t pgd, vm_paddr_t kernstart, vm_size_t kernlen)
 	virtual_end = VM_MAX_KERNEL_ADDRESS - PMAP_MAPDEV_EARLY_SIZE;
 	kernel_vm_end = virtual_avail;
 
-	physmem_exclude_region(kernstart,
-	    pmap_early_vtophys(l1, freemempos) - kernstart, EXFLAG_NOALLOC);
+	physmem_exclude_region(kernstart, bootmem_end - kernstart, EXFLAG_NOALLOC);
 
 	/* Initialize pv chunk mutex early -- UMA (uma_startup1) runs before
 	 * pmap_init() and may trigger pmap_enter/pmap_kenter which need
@@ -1055,19 +1068,13 @@ pmap_init(void)
 }
 
 #ifdef SMP
-/*
- * For SMP, each invalidation builds a single shootdown request handled by
- * smp_targeted_tlb_shootdown(): it computes the remote mask, sends one IPI,
- * flushes locally, and (when interrupts are enabled) waits for every target
- * to flush.  pmap_invalidate_range is now a single shootdown instead of a
- * per-page IPI loop.
- */
+/* All CPUs must acknowledge invalidation before mappings can be reused. */
 static void
 pmap_invalidate_page(pmap_t pmap, vm_offset_t va)
 {
 
 	sched_pin();
-	smp_targeted_tlb_shootdown(pmap, va, 0, LA_TLB_OP_PAGE);
+	smp_invalidate_tlb();
 	sched_unpin();
 }
 
@@ -1076,7 +1083,7 @@ pmap_invalidate_range(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 {
 
 	sched_pin();
-	smp_targeted_tlb_shootdown(pmap, sva, eva, LA_TLB_OP_RANGE);
+	smp_invalidate_tlb();
 	sched_unpin();
 }
 
@@ -1085,7 +1092,7 @@ pmap_invalidate_all(pmap_t pmap)
 {
 
 	sched_pin();
-	smp_targeted_tlb_shootdown(pmap, 0, 0, LA_TLB_OP_ALL);
+	smp_invalidate_tlb();
 	sched_unpin();
 }
 
@@ -1131,7 +1138,8 @@ pmap_invalidate_all(pmap_t pmap)
 	if (pmap == kernel_pmap)
 		invtlb_all(INVTLB_CURRENT_ALL);
 	else
-		flush_tlb_local(pmap);
+		invtlb(INVTLB_GFALSE_AND_ASID,
+		    pmap_get_asid(pmap, PCPU_GET(cpuid)), 0);
 }
 #endif
 
@@ -3064,17 +3072,13 @@ pmap_update_tlb(pmap_t pmap, vm_offset_t va)
 	leaf = pmap_l1(pmap, va);
 	if (leaf != NULL && pmap_pud_valid(leaf) &&
 	    (pmap_pud_entry(leaf) & PTE_HUGE) != 0) {
-		ps = 30;
-		if ((va & (1UL << 30)) != 0)
-			leaf--;
+		ps = L1_SHIFT - 1;
 	} else {
 		leaf = pmap_l2(pmap, va);
 		if (leaf == NULL || !pmap_pmd_valid(leaf))
 			goto out;
 		if ((pmap_pmd_entry(leaf) & PTE_HUGE) != 0) {
-			ps = 21;
-			if ((va & (1UL << 21)) != 0)
-				leaf--;
+			ps = L2_SHIFT - 1;
 		} else {
 			leaf = pmap_l3(pmap, va);
 			if (leaf == NULL || !pmap_pte_valid(leaf))
@@ -3085,42 +3089,45 @@ pmap_update_tlb(pmap_t pmap, vm_offset_t va)
 		}
 	}
 	elo0 = pmap_load(leaf);
-	elo1 = pmap_load(leaf + 1);
-	if (ps > 12) {
-		if ((elo0 & PTE_HUGE_G) == 0)
-			elo0 &= ~PTE_G;
-
-		if ((elo1 & PTE_HUGE_G) == 0)
-			elo1 &= ~PTE_G;
-	}
+	if (ps > PAGE_SHIFT) {
+		/*
+		 * A huge PTE describes the whole directory-sized mapping.
+		 * Split it into two TLB halves, as LDPTE and the hardware
+		 * walker do.  PS is the size of one half, not the whole
+		 * mapping.  The adjacent directory entry may be unrelated.
+		 */
+		elo0 = (elo0 & ~(PTE_HUGE | PTE_HUGE_G)) |
+		    ((elo0 & PTE_HUGE_G) != 0 ? PTE_G : 0);
+		elo1 = elo0 + (1UL << ps);
+	} else
+		elo1 = pmap_load(leaf + 1);
 
 	flags = intr_disable();
 	ehi = va & ~((2UL << ps) - 1);
 	__asm __volatile("csrwr %0, %1" : "+r"(ehi) :
 	    "i"(LOONGARCH_CSR_TLBEHI));
-	__asm __volatile("tlbsrch");
-	__asm __volatile("csrrd %0, %1" : "=r"(idx) :
-	    "i"(LOONGARCH_CSR_TLBIDX));
-	idx = (idx & ~CSR_TLBIDX_PS) | (ps << CSR_TLBIDX_PS_SHIFT);
+	/* NE must be zero when filling a valid translation. */
+	idx = ps << CSR_TLBIDX_PS_SHIFT;
 	__asm __volatile("csrwr %0, %1" : "+r"(idx) :
 	    "i"(LOONGARCH_CSR_TLBIDX));
 	__asm __volatile("csrwr %0, %1" : "+r"(elo0) :
 	    "i"(LOONGARCH_CSR_TLBELO0));
 	__asm __volatile("csrwr %0, %1" : "+r"(elo1) :
 	    "i"(LOONGARCH_CSR_TLBELO1));
-	if ((idx & CSR_TLBIDX_EHINV) != 0) {
-		__asm __volatile("tlbfill");
-		TLB_DBG("pmap_update_tlb: cpu%d pid=%d (%s) tlbfill"
-		    " va=%#lx ps=%lu ELO0=%#lx ELO1=%#lx\n",
-		    PCPU_GET(cpuid), curproc->p_pid, curproc->p_comm,
-		    va, ps, (unsigned long)elo0, (unsigned long)elo1);
-	} else {
-		__asm __volatile("tlbwr");
-		TLB_DBG("pmap_update_tlb: cpu%d pid=%d (%s) tlbwr"
-		    " va=%#lx ps=%lu ELO0=%#lx ELO1=%#lx\n",
-		    PCPU_GET(cpuid), curproc->p_pid, curproc->p_comm,
-		    va, ps, (unsigned long)elo0, (unsigned long)elo1);
-	}
+	/*
+	 * A search at the new pair's base can miss an old smaller entry
+	 * elsewhere in that pair.  Reusing a searched index can also write a
+	 * different page size into an STLB slot, which is not defined by the
+	 * architecture.  Conservatively evict all local translations before
+	 * filling, so TLBFILL chooses the appropriate STLB or MTLB itself and
+	 * no old size overlaps the new translation.  Keep the eviction and
+	 * fill adjacent, with no intervening C memory access.
+	 */
+	__asm __volatile("invtlb %0, $zero, $zero\n\t"
+	    "tlbfill\n\tibar 0" :: "i"(INVTLB_CURRENT_ALL) : "memory");
+	TLB_DBG("pmap_update_tlb: cpu%d pid=%d (%s) tlbfill"
+	    " va=%#lx ps=%lu\n", PCPU_GET(cpuid), curproc->p_pid,
+	    curproc->p_comm, va, ps);
 	intr_restore(flags);
 	return (true);
 
@@ -3134,6 +3141,58 @@ out:
 		invtlb(INVTLB_ADDR_GFALSE_AND_ASID,
 		    pmap_get_asid(pmap, PCPU_GET(cpuid)), va);
 	return (false);
+}
+
+/*
+ * A speculative translation can fault even though the permanent direct-map
+ * leaf already permits the access.  This can happen inside SMR or with a
+ * spin lock held, where pmap_fault() must not acquire a sleep mutex.  Direct
+ * map page tables remain wired, including tables installed by demotion, so
+ * they can be inspected without taking the kernel pmap lock.  Do not change
+ * access/dirty bits or grant permissions here.
+ */
+bool
+pmap_fault_dmap(vm_offset_t va, vm_prot_t ftype)
+{
+	pd_entry_t *table;
+	pt_entry_t entry;
+	register_t flags;
+
+	if (!VIRT_IN_DMAP(va) ||
+	    csr_read64(LOONGARCH_CSR_PGDH) != kernel_pmap->pm_pgdh)
+		return (false);
+	/* The bootstrap L1 table also has a permanent kernel-image alias. */
+	table = &((pd_entry_t *)dmap_pt_va)[pmap_l1_index(va)];
+	entry = pmap_load(table);
+	if (entry == 0 || entry == invalid_pud_table)
+		return (false);
+	if ((entry & PTE_HUGE) == 0) {
+		if (!PHYS_IN_DMAP(PTE_TO_PHYS(entry)))
+			return (false);
+		table = pmap_l1_to_l2(&entry, va);
+		entry = pmap_load(table);
+		if (entry == 0 || entry == invalid_pmd_table)
+			return (false);
+		if ((entry & PTE_HUGE) == 0) {
+			if (!PHYS_IN_DMAP(PTE_TO_PHYS(entry)))
+				return (false);
+			table = pmap_l2_to_l3(&entry, va);
+			entry = pmap_load(table);
+		}
+	}
+	if ((entry & (PTE_P | PTE_V)) != (PTE_P | PTE_V) ||
+	    (ftype == VM_PROT_READ && (entry & PTE_NR) != 0) ||
+	    (ftype == VM_PROT_WRITE &&
+	    (entry & (PTE_W | PTE_D)) != (PTE_W | PTE_D)) ||
+	    (ftype == VM_PROT_EXECUTE && (entry & PTE_NX) != 0))
+		return (false);
+
+	flags = intr_disable();
+	invtlb(INVTLB_ADDR_GTRUE_OR_ASID, pmap_current_asid(), va);
+	flush_icache();
+	atomic_add_long(&pmap_dmap_faults, 1);
+	intr_restore(flags);
+	return (true);
 }
 
 int
@@ -5273,36 +5332,21 @@ restart:
 void *
 pmap_mapbios(vm_paddr_t pa, vm_size_t size)
 {
-	vm_offset_t off, va;
-
-	/* In the direct-map range: just use the DMAP. */
-	if (PHYS_IN_DMAP(pa) && PHYS_IN_DMAP(pa + size - 1))
-		return ((void *)PHYS_TO_DMAP(pa));
-
-	/* Out of DMAP (MMIO / device memory): allocate KVA and map. */
-	off = pa & PAGE_MASK;
-	size = roundup2(off + size, PAGE_SIZE);
-	va = (vm_offset_t)kva_alloc(size);
-	if (va == 0)
+	/*
+	 * MADT enumeration runs before the KVA allocator is initialized.
+	 * DMW0 is already available and uncached, so it is also suitable
+	 * for ACPICA SystemMemory operation regions that contain MMIO.
+	 */
+	if (size == 0 || pa >= (1ULL << DMW_PABITS) ||
+	    size > (1ULL << DMW_PABITS) - pa)
 		return (NULL);
-	pmap_kenter_device(va, size, pa & ~PAGE_MASK);
-	return ((void *)(va + off));
+	return ((void *)(CSR_DMW0_BASE | pa));
 }
 
 void
-pmap_unmapbios(void *p, vm_size_t size)
+pmap_unmapbios(void *p __unused, vm_size_t size __unused)
 {
-	vm_offset_t va, off;
-
-	va = (vm_offset_t)p;
-	off = va & PAGE_MASK;
-	/* DMAP addresses are permanent (no-op). */
-	if (VIRT_IN_DMAP(va))
-		return;
-	/* KVA mappings: remove and free. */
-	size = roundup2(off + size, PAGE_SIZE);
-	pmap_qremove((void *)(va - off), atop(size));
-	kva_free((void *)(va - off), size);
+	/* DMW0 mappings do not allocate virtual address space. */
 }
 
 /*
@@ -5599,6 +5643,30 @@ pmap_mincore(pmap_t pmap, vm_offset_t addr, vm_paddr_t *pap)
 }
 
 void
+pt_walker_init(int cpu)
+{
+	uint32_t pwch;
+
+	/*
+	 * The BSP runs before normal tunable initialization. Fetch once after
+	 * the loader environment is available, before starting secondary CPUs.
+	 */
+	if (cpu == 0) {
+		TUNABLE_INT_FETCH("vm.pmap.ptw", &pmap_hw_ptw);
+		pmap_hw_ptw = pmap_hw_ptw != 0;
+	}
+	pwch = PWCH;
+	if (pmap_hw_ptw &&
+	    (cpu_desc[cpu].cpuinfo.hwcap & HWCAP_LOONGARCH_PTW) != 0) {
+		pwch |= CSR_PWCTL1_PTW;
+		atomic_add_int(&pmap_hw_ptw_active, 1);
+	}
+	csr_write32(PWCL, LOONGARCH_CSR_PWCTL0);
+	csr_write32(pwch, LOONGARCH_CSR_PWCTL1);
+	csr_write32(curcpu, LOONGARCH_CSR_TMID);
+}
+
+void
 pmap_activate_sw(struct thread *td)
 {
 	pmap_t oldpmap, pmap;
@@ -5630,7 +5698,8 @@ pmap_activate_sw(struct thread *td)
 	 * activated here, so the vfork shared-pmap case is still covered.
 	 */
 	if (oldpmap != kernel_pmap) {
-		la_stale_add(pmap_get_asid(oldpmap, cpuid));
+		invtlb(INVTLB_GFALSE_AND_ASID,
+		    pmap_get_asid(oldpmap, cpuid), 0);
 		oldpmap->asid[cpuid] = 0;
 	}
 #ifdef SMP
@@ -5650,16 +5719,8 @@ pmap_activate_sw(struct thread *td)
 	 * entries regardless of which ASID is currently loaded, ensuring none
 	 * can survive to collide with the freshly-installed ASID.
 	 */
-	if (need_tlb_flush) {
+	if (need_tlb_flush)
 		flush_tlb_user();
-		/*
-		 * The wrap evicted every G=0 entry on this CPU, so the
-		 * stale-ASID list (old-generation numbers) is obsolete.  Drop
-		 * it now, before those numbers are recycled onto new pmaps and
-		 * a later drain spuriously flushes a live address space.
-		 */
-		la_stale_reset();
-	}
 
 	/*
 	 * Switch the user-space page table base.  PGDL is used for
@@ -5725,16 +5786,12 @@ void
 pmap_sync_icache(pmap_t pmap, vm_offset_t va, vm_size_t sz)
 {
 
-	/*
-	 * Flush the local icache to make any recent data stores visible
-	 * as instructions.  Remote cpus will flush their own icache on
-	 * the next context switch or exception return.  We do not issue
-	 * remote IPIs here because tlb_invalidate_all_remote spin-waits
-	 * with a global counter that cannot handle concurrent callers,
-	 * and the icache flush is not urgent enough to warrant a complex
-	 * synchronization protocol.
-	 */
+	/* The synchronous shootdown also executes IBAR on every target. */
+#ifdef SMP
+	smp_invalidate_tlb();
+#else
 	flush_icache();
+#endif
 }
 
 /*

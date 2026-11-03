@@ -146,6 +146,7 @@ void	pmap_activate_boot(pmap_t);
 void	pmap_activate_sw(struct thread *);
 void	pmap_bootstrap(vm_offset_t, vm_paddr_t, vm_size_t);
 int	pmap_change_attr(void *va, vm_size_t size, int mode);
+bool	pmap_fault_dmap(vm_offset_t, vm_prot_t);
 void	pmap_kenter(vm_offset_t sva, vm_size_t size, vm_paddr_t pa,
 	    int mode);
 void	pmap_kenter_device(vm_offset_t, vm_size_t, vm_paddr_t);
@@ -191,19 +192,7 @@ asid_init(int cpu)
 	/* initial version: 1, asid: 0 */
 }
 
-static inline void
-pt_walker_init(int cpu)
-{
-	uint32_t pwcl = PWCL;
-	uint32_t pwch = PWCH;
-
-	if (cpu_desc[cpu].cpuinfo.hwcap & HWCAP_LOONGARCH_PTW)
-		pwch |= CSR_PWCTL1_PTW;
-
-	csr_write32(pwcl, LOONGARCH_CSR_PWCTL0);
-	csr_write32(pwch, LOONGARCH_CSR_PWCTL1);
-	csr_write32(curcpu, LOONGARCH_CSR_TMID);
-}
+void	pt_walker_init(int cpu);
 
 static inline uint64_t
 asid_version_mask(int cpu)
