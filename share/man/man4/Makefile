@@ -196,6 +196,7 @@ MAN=	aac.4 \
 	gdb.4 \
 	gem.4 \
 	genet.4 \
+	gnet.4 \
 	genetlink.4 \
 	geneve.4 \
 	geom.4 \
@@ -681,6 +682,7 @@ MAN=	aac.4 \
 	xl.4 \
 	${_xnb.4} \
 	xpt.4 \
+	yt.4 \
 	zero.4
 
 MLINKS=	ads111x.4 ads1013.4 \
@@ -759,6 +761,7 @@ MLINKS+=geneve.4 if_geneve.4
 MLINKS+=geom.4 GEOM.4
 MLINKS+=geom_zero.4 gzero.4
 MLINKS+=gif.4 if_gif.4
+MLINKS+=gnet.4 if_gnet.4
 MLINKS+=gpio.4 gpiobus.4
 MLINKS+=gpioths.4 dht11.4
 MLINKS+=gpioths.4 dht22.4
@@ -863,6 +866,7 @@ MLINKS+=wg.4 if_wg.4
 MLINKS+=wlan.4 wifi.4
 MLINKS+=${_wpi.4} ${_if_wpi.4}
 MLINKS+=xl.4 if_xl.4
+MLINKS+=yt.4 if_yt.4
 
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386"
 _acpi_asus.4=	acpi_asus.4

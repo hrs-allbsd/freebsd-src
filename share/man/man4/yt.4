@@ -1,0 +1,152 @@
+.\"-
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
+.\" Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.Dd November 4, 2026
+.Dt YT 4
+.Os
+.Sh NAME
+.Nm yt ,
+.Nm if_yt
+.Nd Motorcomm YT6801 Gigabit Ethernet driver
+.Sh SYNOPSIS
+To compile this driver into the kernel, place the following lines in the
+kernel configuration file:
+.Bd -ragged -offset indent
+.Cd "device pci"
+.Cd "device ether"
+.Cd "device miibus"
+.Cd "device iflib"
+.Cd "device yt"
+.Ed
+.Pp
+Alternatively, to load the driver as a module at boot time, place the
+following line in
+.Xr loader.conf 5 :
+.Bd -literal -offset indent
+if_yt_load="YES"
+.Ed
+.Sh DESCRIPTION
+The
+.Nm
+driver provides
+.Xr iflib 4
+support for the
+Motorcomm YT6801 PCI Ethernet controller.
+The controller uses a Synopsys DesignWare MAC 4 core.
+The driver uses a single transmit queue and a single receive queue.
+.Pp
+The driver supports 10, 100, and 1000 Mbps operation in full-duplex mode.
+Media selection and autonegotiation are handled by
+.Xr miibus 4 .
+Use
+.Xr ifconfig 8
+to select a media type supported by the attached PHY.
+Half-duplex operation is not supported by this driver.
+.Pp
+Standard Ethernet MTUs up to 1500 bytes and VLAN-sized frames are supported.
+VLAN tag insertion and removal are performed in software.
+Jumbo frames, hardware checksum offloading, TCP segmentation offloading,
+and receive-side scaling are not supported.
+.Sh HARDWARE
+The
+.Nm
+driver supports the following PCI device:
+.Bl -bullet -compact
+.It
+Motorcomm YT6801 Gigabit Ethernet (vendor/device ID 1f0a:6801).
+.El
+.Sh SYSCTL VARIABLES
+The following read-only
+.Xr sysctl 8
+variables are available under
+.Va dev.yt.%d ,
+where
+.Li %d
+is the interface unit number:
+.Bl -tag -width "last_host_irq"
+.It Va interrupts
+Number of handled legacy INTx interrupts.
+.It Va tx_errors
+Number of transmit descriptors reporting an error.
+.It Va rx_errors
+Number of receive descriptors rejected for an error or invalid length.
+.It Va resets
+Number of successful DMA initializations.
+.It Va last_status
+DMA status recorded by the most recent handled interrupt.
+.It Va last_tx
+Status of the most recently reclaimed transmit descriptor.
+.It Va last_rx
+Status of the most recently examined receive descriptor.
+.It Va rearm_pending
+Number of times pending DMA work was found while interrupts were rearmed.
+.It Va last_host_irq
+Wrapper interrupt status recorded by the most recent handled interrupt.
+.It Va mac_config
+Current MAC configuration register.
+.It Va dma_bus_mode
+Current DMA bus mode register.
+.It Va dma_status
+Current DMA status register.
+.It Va dma_irq_enable
+Current DMA interrupt enable register.
+.It Va dma_opmode
+Current receive-channel control register.
+.El
+.Pp
+Additional queue statistics and settings are provided by
+.Xr iflib 4 .
+.Sh DIAGNOSTICS
+.Bl -diag
+.It "yt%d: invalid firmware MAC address"
+The address supplied by firmware is zero or a multicast address.
+The device cannot attach.
+.It "yt%d: TX error descriptor=%#x"
+The hardware reported a transmit error.
+The descriptor status is printed for the first error;
+.Va dev.yt.%d.tx_errors
+counts subsequent errors.
+.It "yt%d: DMA reset timeout; bus mastering disabled"
+The controller did not complete a DMA reset.
+Bus mastering was disabled to prevent further DMA access.
+.El
+.Sh SEE ALSO
+.Xr iflib 4 ,
+.Xr miibus 4 ,
+.Xr pci 4 ,
+.Xr vlan 4 ,
+.Xr loader.conf 5 ,
+.Xr rc.conf 5 ,
+.Xr ifconfig 8 ,
+.Xr sysctl 8
+.Sh HISTORY
+The
+.Nm
+driver was added in the LoongArch port of
+.Fx 16.0 .
+.Sh AUTHORS
+This manual page was written by
+.An Hiroki Sato Aq Mt hrs@FreeBSD.org .

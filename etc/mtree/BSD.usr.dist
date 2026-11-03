@@ -513,6 +513,8 @@
                 ..
                 i386
                 ..
+                loongarch64
+                ..
                 powerpc
                 ..
             ..

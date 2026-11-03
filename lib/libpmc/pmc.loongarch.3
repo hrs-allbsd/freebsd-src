@@ -1,0 +1,127 @@
+.\"-
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
+.\" Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.Dd November 4, 2026
+.Dt PMC.LOONGARCH 3
+.Os
+.Sh NAME
+.Nm pmc.loongarch
+.Nd LoongArch performance monitoring counters
+.Sh LIBRARY
+.Lb libpmc
+.Sh SYNOPSIS
+.In pmc.h
+.Sh DESCRIPTION
+The
+.Xr hwpmc 4
+LoongArch backend supports version 1 performance monitoring units with
+64-bit counters.
+The number of counters is obtained from CPUCFG register 6.
+All active CPUs must report compatible PMU parameters.
+If these requirements are not met, hardware PMCs are unavailable;
+software PMCs described in
+.Xr pmc.soft 3
+can still be used.
+.Pp
+The backend supports process-scope and system-scope counting and sampling.
+Counter overflow interrupts are delivered through
+.Xr cpuic 4 .
+Sampling is not precise and may record an instruction address after the
+instruction responsible for the event.
+.Ss Event Specifiers
+The following named events use the Loongson event map.
+Their detailed semantics and availability depend on the processor model.
+.Bl -column "LOONGARCH-BRANCH_MISSES" "0x00" -offset indent
+.It Em Event Ta Em Code
+.It Li LOONGARCH-CPU_CYCLES Ta Li 0x00
+.It Li LOONGARCH-INSTRUCTIONS Ta Li 0x01
+.It Li LOONGARCH-BRANCHES Ta Li 0x02
+.It Li LOONGARCH-BRANCH_MISSES Ta Li 0x03
+.It Li LOONGARCH-L1I_REFERENCES Ta Li 0x06
+.It Li LOONGARCH-L1I_MISSES Ta Li 0x07
+.It Li LOONGARCH-L1D_REFERENCES Ta Li 0x08
+.It Li LOONGARCH-L1D_MISSES Ta Li 0x09
+.It Li LOONGARCH-LL_REFERENCES Ta Li 0x0c
+.It Li LOONGARCH-LL_MISSES Ta Li 0x0d
+.It Li LOONGARCH-ITLB_MISSES Ta Li 0x3b
+.It Li LOONGARCH-DTLB_MISSES Ta Li 0x3c
+.El
+.Pp
+The aliases
+.Li cycles ,
+.Li instructions ,
+.Li instructions-retired ,
+.Li branches ,
+and
+.Li branch-misses
+select the corresponding named events.
+.Pp
+To specify a processor-specific event directly, use
+.Li LOONGARCH-RAW,event= Ns Ar code .
+The event code is required, may be decimal, hexadecimal, or octal,
+and must be in the range 0 through 0x3ff.
+The event encoding must be appropriate for the processor being measured.
+.Ss Event Qualifiers
+Event specifiers accept the following optional comma-separated qualifiers:
+.Bl -tag -width "usr"
+.It Li os
+Count events in kernel privilege level PLV0.
+.It Li usr
+Count events in user privilege level PLV3.
+.El
+.Pp
+If neither qualifier is specified, both privilege levels are counted.
+No edge, invert, threshold, or event-mask qualifiers are supported.
+.Ss Sampling
+Sampling periods must be positive and no greater than
+.Li 0x7fffffffffffffff .
+The backend programs overflow at bit 63 of the counter and reloads the
+counter after processing an overflow interrupt.
+.Ss Examples
+Count user-mode retired instructions for a command:
+.Bd -literal -offset indent
+pmcstat -p instructions,usr command
+.Ed
+.Pp
+Sample kernel cycles system-wide:
+.Bd -literal -offset indent
+pmcstat -n 1000000 -S cycles,os
+.Ed
+.Sh SEE ALSO
+.Xr pmc 3 ,
+.Xr pmc.soft 3 ,
+.Xr pmc_allocate 3 ,
+.Xr pmc_capabilities 3 ,
+.Xr cpuic 4 ,
+.Xr hwpmc 4 ,
+.Xr pmccontrol 8 ,
+.Xr pmcstat 8
+.Sh HISTORY
+LoongArch PMU support was added in the LoongArch port of
+.Fx 16.0 .
+.Sh AUTHORS
+This manual page was written by
+.An Hiroki Sato Aq Mt hrs@FreeBSD.org .

@@ -1,0 +1,70 @@
+.\"-
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
+.\" Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.Dd November 4, 2026
+.Dt EIOIC 4 loongarch64
+.Os
+.\" .Nm loongarch64/eioic
+.Sh NAME
+.Nm eioic
+.Nd LoongArch extended I/O interrupt controller
+.Sh SYNOPSIS
+This driver is a standard part of the LoongArch kernel.
+.Sh DESCRIPTION
+The
+.Nm
+driver provides support for the extended I/O interrupt controller
+(EIOINTC) used by Loongson systems.
+It manages external interrupt vectors and dispatches them through
+.Xr cpuic 4 .
+The
+.Xr pch_pic 4
+controller uses these vectors to deliver platform device interrupts.
+.Pp
+On ACPI systems the controller is instantiated by the platform nexus.
+When ACPI is absent, it can attach to flattened device tree nodes with
+either of the following compatible strings:
+.Bl -bullet -compact
+.It
+.Qq loongson,eiointc
+.It
+.Qq loongson,ls2k2000-eiointc
+.El
+.Pp
+No driver-specific kernel configuration directive is required.
+.Sh SEE ALSO
+.Xr acpi 4 ,
+.Xr cpuic 4 ,
+.Xr fdt 4 ,
+.Xr pch_pic 4
+.Sh HISTORY
+The
+.Nm
+driver was added in the LoongArch port of
+.Fx 16.0 .
+.Sh AUTHORS
+This manual page was written by
+.An Hiroki Sato Aq Mt hrs@FreeBSD.org .
