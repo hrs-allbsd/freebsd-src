@@ -322,8 +322,16 @@ pci_host_generic_acpi_init(device_t dev)
 		return (ENXIO);
 
 	/* Coherency attribute */
-	if (ACPI_FAILURE(acpi_GetInteger(handle, "_CCA", &sc->base.coherent)))
+	status = acpi_GetInteger(handle, "_CCA", &sc->base.coherent);
+	if (ACPI_FAILURE(status)) {
 		sc->base.coherent = 0;
+#ifdef __loongarch__
+		/* Use the CPU's DMA capability when firmware omits _CCA. */
+		if (status == AE_NOT_FOUND)
+			sc->base.coherent =
+			    (read_cpucfg(LOONGARCH_CPUCFG3) & CPUCFG3_CCDMA) != 0;
+#endif
+	}
 	if (bootverbose)
 		device_printf(dev, "Bus is%s cache-coherent\n",
 		    sc->base.coherent ? "" : " not");
