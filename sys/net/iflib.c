@@ -7451,7 +7451,8 @@ iflib_msix_init(if_ctx_t ctx)
 	}
 
 msi:
-	vectors = pci_msi_count(dev);
+	/* The shared queue interrupt needs only one supported message. */
+	vectors = min(1, pci_msi_count(dev));
 	scctx->isc_nrxqsets = 1;
 	scctx->isc_ntxqsets = 1;
 	scctx->isc_vectors = vectors;
