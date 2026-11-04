@@ -78,6 +78,18 @@ driver supports the following PCI device:
 .It
 Motorcomm YT6801 Gigabit Ethernet (vendor/device ID 1f0a:6801).
 .El
+The driver uses a single MSI message when the platform can allocate one,
+with a shared interrupt for the transmit and receive queues.
+It falls back to legacy INTx when MSI is unavailable or allocation fails.
+MSI-X queue routing is not supported.
+.Sh LOADER TUNABLES
+The following tunable can be set in
+.Xr loader.conf 5 :
+.Bl -tag -width "hint.yt.%d.disable_msi"
+.It Va hint.yt.%d.disable_msi
+Set to a nonzero value to use legacy INTx instead of MSI for this unit.
+The default is zero.
+.El
 .Sh SYSCTL VARIABLES
 The following read-only
 .Xr sysctl 8
@@ -88,7 +100,7 @@ where
 is the interface unit number:
 .Bl -tag -width "last_host_irq"
 .It Va interrupts
-Number of handled legacy INTx interrupts.
+Number of handled device interrupts.
 .It Va tx_errors
 Number of transmit descriptors reporting an error.
 .It Va rx_errors

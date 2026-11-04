@@ -588,7 +588,7 @@ attach_pre(if_ctx_t ctx)
 	struct yt_softc *sc = iflib_get_softc(ctx);
 	if_softc_ctx_t c = iflib_get_softc_ctx(ctx);
 	uint32_t low, high, version;
-	int error;
+	int disable_msi, error;
 	sc->ctx = ctx;
 	sc->dev = iflib_get_dev(ctx);
 	sc->link = LINK_STATE_UNKNOWN;
@@ -628,8 +628,12 @@ attach_pre(if_ctx_t ctx)
 	c->isc_rxqsizes[0] = c->isc_nrxd[0] * sizeof(struct yt_desc);
 	c->isc_ntxqsets = c->isc_nrxqsets = 1;
 	c->isc_ntxqsets_max = c->isc_nrxqsets_max = 1;
-	c->isc_msix_bar =
-	    0; /* INTx via ACPI; MSI is not implemented on this port. */
+	/* Use iflib's single-message MSI path, without MSI-X queue routing. */
+	disable_msi = 0;
+	(void)resource_int_value(device_get_name(sc->dev),
+	    device_get_unit(sc->dev), "disable_msi", &disable_msi);
+	c->isc_msix_bar = disable_msi ? 0 : PCIR_BAR(0);
+	c->isc_disable_msix = 1;
 	c->isc_dma_width = 32;
 	c->isc_max_frame_size = YT_FRAME_MAX;
 	c->isc_capabilities = c->isc_capenable = IFCAP_VLAN_MTU;
@@ -661,7 +665,7 @@ attach_post(if_ctx_t ctx)
 	struct sysctl_oid_list *l = SYSCTL_CHILDREN(
 	    device_get_sysctl_tree(sc->dev));
 	SYSCTL_ADD_U64(s, l, OID_AUTO, "interrupts", CTLFLAG_RD, &sc->irq_count,
-	    0, "INTx events");
+	    0, "Handled device interrupts");
 	SYSCTL_ADD_U64(s, l, OID_AUTO, "tx_errors", CTLFLAG_RD, &sc->tx_errors,
 	    0, "TX errors");
 	SYSCTL_ADD_U64(s, l, OID_AUTO, "rx_errors", CTLFLAG_RD, &sc->rx_errors,
