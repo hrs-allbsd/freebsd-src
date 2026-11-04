@@ -47,7 +47,8 @@ END(generic_bs_r_2)
 
 ENTRY(generic_bs_r_4)
 	add.d	$a3, $a1, $a2
-	ld.wu	$a0, $a3, 0
+	/* The ABI sign-extends 32-bit integer return values. */
+	ld.w	$a0, $a3, 0
 	jr 	$ra
 END(generic_bs_r_4)
 
