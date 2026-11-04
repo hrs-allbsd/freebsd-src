@@ -497,10 +497,17 @@ passasync(void *callback_arg, uint32_t code,
 	case AC_FOUND_DEVICE:
 	{
 		struct ccb_getdev *cgd;
+		struct cam_periph *existing;
 		cam_status status;
 
 		cgd = (struct ccb_getdev *)arg;
 		if (cgd == NULL)
+			break;
+
+		/* Registration replay may overlap queued discovery events. */
+		existing = cam_periph_find(path, PERIPH_NAME);
+		if (existing != NULL &&
+		    (existing->flags & CAM_PERIPH_INVALID) == 0)
 			break;
 
 		/*

@@ -736,6 +736,7 @@ ndaasync(void *callback_arg, uint32_t code, struct cam_path *path, void *arg)
 	case AC_FOUND_DEVICE:
 	{
 		struct ccb_getdev *cgd;
+		struct cam_periph *existing;
 		cam_status status;
 
 		cgd = (struct ccb_getdev *)arg;
@@ -743,6 +744,12 @@ ndaasync(void *callback_arg, uint32_t code, struct cam_path *path, void *arg)
 			break;
 
 		if (cgd->protocol != PROTO_NVME)
+			break;
+
+		/* Registration replay may overlap queued discovery events. */
+		existing = cam_periph_find(path, "nda");
+		if (existing != NULL &&
+		    (existing->flags & CAM_PERIPH_INVALID) == 0)
 			break;
 
 		/*
