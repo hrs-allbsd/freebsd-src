@@ -404,6 +404,13 @@ generic_pcie_acpi_route_interrupt(device_t bus, device_t dev, int pin)
 	struct generic_pcie_acpi_softc *sc;
 
 	sc = device_get_softc(bus);
+#ifdef __loongarch__
+	/* The LS7A HDMI function advertises INTA but is wired to INTC. */
+	if ((sc->base.quirks & PCIE_ECAM_LOONGSON_QUIRK) != 0 &&
+	    pci_get_devid(dev) == 0x7a370014 &&
+	    pci_get_function(dev) == 2 && pin == 1)
+		pin = 3;
+#endif
 	return (acpi_pcib_route_interrupt(bus, dev, pin, &sc->ap_prt));
 }
 
