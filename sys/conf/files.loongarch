@@ -62,6 +62,7 @@ loongarch/loongarch/vm_machdep.c	standard
 loongarch/loongarch/cpuic.c		standard
 loongarch/loongarch/eioic.c		standard
 loongarch/loongarch/pch_pic.c		standard
+loongarch/loongarch/pch_msi.c		standard
 dev/pci/pci_host_generic.c		optional pci
 dev/pci/pci_host_generic_acpi.c		optional pci acpi
 dev/acpica/acpi_pcib.c			optional acpi pci

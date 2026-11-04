@@ -1,0 +1,80 @@
+.\"-
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
+.\" Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.Dd November 4, 2026
+.Dt PCH_MSI 4 loongarch64
+.Os
+.Sh NAME
+.Nm pch_msi
+.Nd Loongson PCH MSI and MSI-X controller
+.Sh SYNOPSIS
+This driver is a standard part of the LoongArch kernel.
+.Sh DESCRIPTION
+The
+.Nm
+driver allocates PCI MSI and MSI-X vectors on Loongson systems.
+The bridge converts writes to the firmware-specified MSI address into
+interrupt messages delivered through
+.Xr eioic 4 .
+Message data selects the absolute EIOINTC vector.
+.Pp
+On ACPI systems the driver obtains the message address and vector range
+from the MADT MSI PIC entry.
+When ACPI is absent, it attaches to a flattened device tree node with
+the compatible string
+.Qq loongson,pch-msi-1.0 .
+The node supplies the message address in
+.Va reg
+and the vector range in
+.Va loongson,msi-base-vec
+and
+.Va loongson,msi-num-vecs .
+The vector range must be separate from the platform INTx vectors.
+.Pp
+MSI allocations use contiguous, aligned vectors.
+MSI-X allocations use individual vectors.
+The PCI subsystem programs the message address and data into the device;
+the controller driver does not write to device BARs.
+Interrupt CPU assignment is provided by
+.Xr eioic 4 .
+.Pp
+If firmware does not describe a usable MSI controller, PCI drivers may
+fall back to conventional INTx interrupts.
+.Sh SEE ALSO
+.Xr cpuset 1 ,
+.Xr acpi 4 ,
+.Xr eioic 4 ,
+.Xr fdt 4 ,
+.Xr pch_pic 4 ,
+.Xr pci 4
+.Sh HISTORY
+The
+.Nm
+driver was added in the LoongArch port of
+.Fx 16.0 .
+.Sh AUTHORS
+This driver and manual page were written by
+.An Hiroki Sato Aq Mt hrs@FreeBSD.org .

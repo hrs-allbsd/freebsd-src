@@ -43,6 +43,9 @@ It manages external interrupt vectors and dispatches them through
 The
 .Xr pch_pic 4
 controller uses these vectors to deliver platform device interrupts.
+The
+.Xr pch_msi 4
+controller allocates vectors for PCI MSI and MSI-X messages.
 .Pp
 On ACPI systems the controller is instantiated by the platform nexus.
 When ACPI is absent, it can attach to flattened device tree nodes with
@@ -66,6 +69,7 @@ No driver-specific kernel configuration directive is required.
 .Xr acpi 4 ,
 .Xr cpuic 4 ,
 .Xr fdt 4 ,
+.Xr pch_msi 4 ,
 .Xr pch_pic 4
 .Sh HISTORY
 The

@@ -79,8 +79,7 @@ int	cpuic_setup_cpu_intr(const char *, driver_filter_t *,
 	    void (*)(void *), void *, u_int, int, void **);
 void	cpuic_setup_ipi(driver_filter_t *);
 
-/* ACPI MSI cross-reference for the generic PCI host bridge (placeholder
- * until the PCH MSI controller is properly wired via MADT MSI_PIC). */
+/* ACPI cross-reference for the MADT MSI_PIC controller. */
 #define	ACPI_MSI_XREF	2
 
 /*
