@@ -58,6 +58,7 @@
 #define HDAC_QUIRK_64BIT	(1 << 0)
 #define HDAC_QUIRK_DMAPOS	(1 << 1)
 #define HDAC_QUIRK_MSI		(1 << 2)
+#define HDAC_QUIRK_SDCTL32	(1 << 3)
 
 static const struct {
 	const char *key;
@@ -76,6 +77,7 @@ static const struct {
 	char		quirks_on;
 	char		quirks_off;
 } hdac_devices[] = {
+	{ 0x7a370014, "Loongson HDMI", HDAC_QUIRK_SDCTL32, 0 },
 	{ HDA_INTEL_OAK,     "Intel Oaktrail",	0, 0 },
 	{ HDA_INTEL_CMLKLP,  "Intel Comet Lake-LP",	0, 0 },
 	{ HDA_INTEL_CMLKH,   "Intel Comet Lake-H",	0, 0 },
@@ -2063,7 +2065,12 @@ hdac_stream_start(device_t dev, device_t child, int dir, int stream,
 	ctl |= stream << HDAC_SDCTL2_STRM_SHIFT;
 	ctl &= ~HDAC_SDCTL2_STRIPE_MASK;
 	ctl |= sc->streams[ss].stripe << HDAC_SDCTL2_STRIPE_SHIFT;
-	HDAC_WRITE_1(&sc->mem, off + HDAC_SDCTL2, ctl);
+	if (sc->quirks_on & HDAC_QUIRK_SDCTL32)
+		HDAC_WRITE_4(&sc->mem, off + HDAC_SDCTL0,
+		    (HDAC_READ_4(&sc->mem, off + HDAC_SDCTL0) & 0x0000ffff) |
+		    (ctl << 16));
+	else
+		HDAC_WRITE_1(&sc->mem, off + HDAC_SDCTL2, ctl);
 
 	HDAC_WRITE_2(&sc->mem, off + HDAC_SDFMT, sc->streams[ss].format);
 
@@ -2073,10 +2080,17 @@ hdac_stream_start(device_t dev, device_t child, int dir, int stream,
 
 	HDAC_WRITE_1(&sc->mem, off + HDAC_SDSTS,
 	    HDAC_SDSTS_DESE | HDAC_SDSTS_FIFOE | HDAC_SDSTS_BCIS);
-	ctl = HDAC_READ_1(&sc->mem, off + HDAC_SDCTL0);
+	if (sc->quirks_on & HDAC_QUIRK_SDCTL32)
+		ctl = HDAC_READ_4(&sc->mem, off + HDAC_SDCTL0) & 0x00ffffff;
+	else
+		ctl = HDAC_READ_1(&sc->mem, off + HDAC_SDCTL0);
 	ctl |= HDAC_SDCTL_IOCE | HDAC_SDCTL_FEIE | HDAC_SDCTL_DEIE |
 	    HDAC_SDCTL_RUN;
-	HDAC_WRITE_1(&sc->mem, off + HDAC_SDCTL0, ctl);
+	if (sc->quirks_on & HDAC_QUIRK_SDCTL32) {
+		/* A byte write of RUN clears the stream tag on this controller. */
+		HDAC_WRITE_4(&sc->mem, off + HDAC_SDCTL0, ctl);
+	} else
+		HDAC_WRITE_1(&sc->mem, off + HDAC_SDCTL0, ctl);
 
 	sc->streams[ss].blksz = blksz;
 	sc->streams[ss].running = 1;
