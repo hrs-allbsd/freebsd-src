@@ -26,7 +26,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd November 4, 2026
+.Dd November 5, 2026
 .Dt SND_HDA 4
 .Os
 .Sh NAME
@@ -109,6 +109,12 @@ will do the opposite and takes precedence.
 Options can be separated by whitespace and commas.
 .It Va hint.hdac.%d.msi
 Controls MSI (Message Signaled Interrupts) support.
+.It Va hint.hdac.%d.hdmi_video
+On Loongson LS7A2000 revision 2, enable HDMI packets and the video leading
+guard band on connected, firmware-enabled outputs before playback.
+The default is 1.
+Set to 0 to retain the firmware video settings.
+This setting has no effect while a graphics driver owns the display.
 .It Va hint.hdac.%d.cad%d.nid%d.config
 Same as
 .Va hint.hdaa.%d.nid%d.config
@@ -399,6 +405,9 @@ Intel High Definition Audio 1.0 specification.
 .Pp
 On Loongson LS7A2000 systems using the firmware framebuffer,
 HDMI playback requires a firmware-initialized display mode.
+On revision 2, the driver enables HDMI video packets and the leading guard
+band on connected outputs at attach time, without enabling audio.
+This prevents a dark HDMI display from depending on the first playback.
 The driver enables HDMI packet and audio transmission during playback
 and restores the prior transmission settings when playback stops.
 These firmware adjustments are skipped if a graphics driver is attached.

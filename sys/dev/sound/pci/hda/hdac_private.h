@@ -176,6 +176,8 @@ struct hdac_softc {
 	bus_size_t	hdmi_size;
 	uint32_t	hdmi_control[2];
 	u_int		hdmi_users[2];
+	uint32_t	hdmi_video_control[2];
+	u_int		hdmi_video_ports;
 
 	uint32_t	quirks_on;
 	uint32_t	quirks_off;

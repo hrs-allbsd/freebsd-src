@@ -729,6 +729,81 @@ hdac_hdmi_firmware_owned(struct hdac_softc *sc)
 	return (child == NULL || !device_is_attached(child));
 }
 
+#define LOONGSON_HDMI_CONTROL(port)	(0x1720 + (port) * 0x10)
+#define LOONGSON_HDMI_ENABLE		0x01
+#define LOONGSON_HDMI_PACKET_ENABLE	0x02
+#define LOONGSON_HDMI_VIDEO_LGB_DISABLE	0x08
+#define LOONGSON_HDMI_VIDEO_MASK		\
+	(LOONGSON_HDMI_PACKET_ENABLE | LOONGSON_HDMI_VIDEO_LGB_DISABLE)
+#define LOONGSON_HDMI_HPD			0x1ba0
+
+static void
+hdac_hdmi_video_init(struct hdac_softc *sc)
+{
+	uint32_t control, hpd;
+	int enable, port;
+
+	enable = 1;
+	resource_int_value(device_get_name(sc->dev), device_get_unit(sc->dev),
+	    "hdmi_video", &enable);
+	if (!enable || !hdac_hdmi_firmware_owned(sc))
+		return;
+	hpd = bus_space_read_4(sc->mem.mem_tag, sc->hdmi_handle,
+	    LOONGSON_HDMI_HPD);
+	if (hpd == 0xffffffff)
+		return;
+	for (port = 0; port < 2; port++) {
+		if ((hpd & (1U << port)) == 0)
+			continue;
+		control = bus_space_read_4(sc->mem.mem_tag, sc->hdmi_handle,
+		    LOONGSON_HDMI_CONTROL(port));
+		if (control == 0xffffffff ||
+		    (control & LOONGSON_HDMI_ENABLE) == 0 ||
+		    (control & LOONGSON_HDMI_VIDEO_MASK) ==
+		    LOONGSON_HDMI_PACKET_ENABLE)
+			continue;
+		sc->hdmi_video_control[port] = control & LOONGSON_HDMI_VIDEO_MASK;
+		sc->hdmi_video_ports |= 1U << port;
+		/* HDMI packets require the video leading guard band. */
+		bus_space_write_4(sc->mem.mem_tag, sc->hdmi_handle,
+		    LOONGSON_HDMI_CONTROL(port),
+		    (control & ~LOONGSON_HDMI_VIDEO_MASK) |
+		    LOONGSON_HDMI_PACKET_ENABLE);
+		bus_space_barrier(sc->mem.mem_tag, sc->hdmi_handle,
+		    LOONGSON_HDMI_CONTROL(port), 4, BUS_SPACE_BARRIER_WRITE);
+		if (bootverbose)
+			device_printf(sc->dev,
+			    "Enabled firmware HDMI video on port %d\n", port);
+	}
+}
+
+static void
+hdac_hdmi_video_restore(struct hdac_softc *sc)
+{
+	uint32_t control;
+	int port;
+
+	if (!hdac_hdmi_firmware_owned(sc))
+		return;
+	for (port = 0; port < 2; port++) {
+		if ((sc->hdmi_video_ports & (1U << port)) == 0)
+			continue;
+		control = bus_space_read_4(sc->mem.mem_tag, sc->hdmi_handle,
+		    LOONGSON_HDMI_CONTROL(port));
+		if (control == 0xffffffff ||
+		    (control & LOONGSON_HDMI_VIDEO_MASK) !=
+		    LOONGSON_HDMI_PACKET_ENABLE)
+			continue;
+		bus_space_write_4(sc->mem.mem_tag, sc->hdmi_handle,
+		    LOONGSON_HDMI_CONTROL(port),
+		    (control & ~LOONGSON_HDMI_VIDEO_MASK) |
+		    sc->hdmi_video_control[port]);
+		bus_space_barrier(sc->mem.mem_tag, sc->hdmi_handle,
+		    LOONGSON_HDMI_CONTROL(port), 4, BUS_SPACE_BARRIER_WRITE);
+	}
+	sc->hdmi_video_ports = 0;
+}
+
 static void
 hdac_hdmi_map(struct hdac_softc *sc)
 {
@@ -762,6 +837,7 @@ hdac_hdmi_map(struct hdac_softc *sc)
 	device_busy(display);
 	if (bootverbose)
 		device_printf(sc->dev, "Using firmware HDMI audio controls\n");
+	hdac_hdmi_video_init(sc);
 }
 
 static int
@@ -849,6 +925,7 @@ hdac_mem_free(struct hdac_softc *sc)
 				hdac_hdmi_stop(sc, port);
 			}
 		}
+		hdac_hdmi_video_restore(sc);
 		bus_space_unmap(sc->mem.mem_tag, sc->hdmi_handle, sc->hdmi_size);
 		device_unbusy(sc->hdmi_dev);
 		sc->hdmi_dev = NULL;
