@@ -4,6 +4,7 @@
  * Copyright (c) 2006 Stephane E. Potvin <sepotvin@videotron.ca>
  * Copyright (c) 2006 Ariff Abdullah <ariff@FreeBSD.org>
  * Copyright (c) 2008-2012 Alexander Motin <mav@FreeBSD.org>
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -713,6 +714,97 @@ hdac_dma_free(struct hdac_softc *sc, struct hdac_dma *dma)
 	dma->dma_size = 0;
 }
 
+/* The firmware framebuffer has no display driver to enable HDMI audio. */
+static int
+hdac_hdmi_firmware_owned(struct hdac_softc *sc)
+{
+	device_t child;
+
+	if (sc->hdmi_dev == NULL)
+		return (0);
+	child = device_find_child(sc->hdmi_dev, "drmn", -1);
+	if (child != NULL && device_is_attached(child))
+		return (0);
+	child = device_find_child(sc->hdmi_dev, "drm", -1);
+	return (child == NULL || !device_is_attached(child));
+}
+
+static void
+hdac_hdmi_map(struct hdac_softc *sc)
+{
+	device_t display, *children;
+	rman_res_t start, size;
+	int count, i;
+
+	if (pci_get_devid(sc->dev) != 0x7a370014)
+		return;
+	display = pci_find_dbsf(pci_get_domain(sc->dev),
+	    pci_get_bus(sc->dev), pci_get_slot(sc->dev), 1);
+	if (display == NULL || pci_get_devid(display) != 0x7a360014 ||
+	    pci_get_revid(display) != 2 || !device_is_attached(display) ||
+	    strcmp(device_get_name(display), "vgapci") != 0 ||
+	    (pci_read_config(display, PCIR_COMMAND, 2) & PCIM_CMD_MEMEN) == 0)
+		return;
+	if (device_get_children(display, &children, &count) != 0)
+		return;
+	for (i = 0; i < count; i++)
+		if (device_is_attached(children[i]))
+			break;
+	free(children, M_TEMP);
+	if (i != count || bus_get_resource(display, SYS_RES_MEMORY,
+	    PCIR_BAR(0), &start, &size) != 0 || start == 0 || size != 0x10000)
+		return;
+	if (bus_space_map(sc->mem.mem_tag, start, size, 0,
+	    &sc->hdmi_handle) != 0)
+		return;
+	sc->hdmi_size = size;
+	sc->hdmi_dev = display;
+	device_busy(display);
+	if (bootverbose)
+		device_printf(sc->dev, "Using firmware HDMI audio controls\n");
+}
+
+static int
+hdac_hdmi_start(struct hdac_softc *sc, int port)
+{
+	bus_size_t off;
+	uint32_t control;
+
+	if (port < 0 || port >= 2 || !hdac_hdmi_firmware_owned(sc))
+		return (0);
+	off = 0x1720 + port * 0x10;
+	control = bus_space_read_4(sc->mem.mem_tag, sc->hdmi_handle, off);
+	if (control == 0xffffffff || (control & 1) == 0)
+		return (0);
+	if (sc->hdmi_users[port]++ == 0) {
+		sc->hdmi_control[port] = control & 0x0e;
+		/* Enable packets/audio and the HDMI video guard band. */
+		bus_space_write_4(sc->mem.mem_tag, sc->hdmi_handle, off,
+		    (control & ~0x0e) | 0x06);
+		bus_space_barrier(sc->mem.mem_tag, sc->hdmi_handle, off, 4,
+		    BUS_SPACE_BARRIER_WRITE);
+	}
+	return (1);
+}
+
+static void
+hdac_hdmi_stop(struct hdac_softc *sc, int port)
+{
+	bus_size_t off;
+	uint32_t control;
+
+	if (port < 0 || port >= 2 || sc->hdmi_users[port] == 0)
+		return;
+	if (--sc->hdmi_users[port] != 0 || !hdac_hdmi_firmware_owned(sc))
+		return;
+	off = 0x1720 + port * 0x10;
+	control = bus_space_read_4(sc->mem.mem_tag, sc->hdmi_handle, off);
+	bus_space_write_4(sc->mem.mem_tag, sc->hdmi_handle, off,
+	    (control & ~0x0e) | sc->hdmi_control[port]);
+	bus_space_barrier(sc->mem.mem_tag, sc->hdmi_handle, off, 4,
+	    BUS_SPACE_BARRIER_WRITE);
+}
+
 /****************************************************************************
  * int hdac_mem_alloc(struct hdac_softc *)
  *
@@ -748,6 +840,20 @@ static void
 hdac_mem_free(struct hdac_softc *sc)
 {
 	struct hdac_mem *mem;
+	int port;
+
+	if (sc->hdmi_dev != NULL) {
+		for (port = 0; port < 2; port++) {
+			if (sc->hdmi_users[port] != 0) {
+				sc->hdmi_users[port] = 1;
+				hdac_hdmi_stop(sc, port);
+			}
+		}
+		bus_space_unmap(sc->mem.mem_tag, sc->hdmi_handle, sc->hdmi_size);
+		device_unbusy(sc->hdmi_dev);
+		sc->hdmi_dev = NULL;
+		sc->hdmi_size = 0;
+	}
 
 	mem = &sc->mem;
 	if (mem->mem_res != NULL)
@@ -1288,6 +1394,7 @@ hdac_attach(device_t dev)
 	result = hdac_mem_alloc(sc);
 	if (result != 0)
 		goto hdac_attach_fail;
+	hdac_hdmi_map(sc);
 
 	/* Get Capabilities */
 	hdac_reset(sc, 1);
@@ -1990,6 +2097,9 @@ hdac_stream_alloc(device_t dev, device_t child, int dir, int format, int stripe,
 		stream = ss + 1;
 
 	sc->streams[ss].dev = child;
+	sc->streams[ss].hdmi_port =
+	    (dir == 1 && cad < 2 && sc->hdmi_dev != NULL) ? cad : -1;
+	sc->streams[ss].hdmi_active = 0;
 	sc->streams[ss].dir = dir;
 	sc->streams[ss].stream = stream;
 	sc->streams[ss].bw = bw;
@@ -2086,6 +2196,9 @@ hdac_stream_start(device_t dev, device_t child, int dir, int stream,
 		ctl = HDAC_READ_1(&sc->mem, off + HDAC_SDCTL0);
 	ctl |= HDAC_SDCTL_IOCE | HDAC_SDCTL_FEIE | HDAC_SDCTL_DEIE |
 	    HDAC_SDCTL_RUN;
+	if (!sc->streams[ss].hdmi_active)
+		sc->streams[ss].hdmi_active =
+		    hdac_hdmi_start(sc, sc->streams[ss].hdmi_port);
 	if (sc->quirks_on & HDAC_QUIRK_SDCTL32) {
 		/* A byte write of RUN clears the stream tag on this controller. */
 		HDAC_WRITE_4(&sc->mem, off + HDAC_SDCTL0, ctl);
@@ -2123,6 +2236,10 @@ hdac_stream_stop(device_t dev, device_t child, int dir, int stream)
 	HDAC_WRITE_4(&sc->mem, HDAC_INTCTL, ctl);
 
 	sc->streams[ss].running = 0;
+	if (sc->streams[ss].hdmi_active) {
+		hdac_hdmi_stop(sc, sc->streams[ss].hdmi_port);
+		sc->streams[ss].hdmi_active = 0;
+	}
 	hdac_poll_reinit(sc);
 }
 

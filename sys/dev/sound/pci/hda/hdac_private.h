@@ -3,6 +3,7 @@
  *
  * Copyright (c) 2006 Stephane E. Potvin <sepotvin@videotron.ca>
  * Copyright (c) 2008-2012 Alexander Motin <mav@FreeBSD.org>
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -150,6 +151,8 @@ struct hdac_bdle {
 
 struct hdac_stream {
 	device_t	dev;
+	int		hdmi_port;
+	int		hdmi_active;
 	struct hdac_dma	bdl;
 	int		dir;
 	int		stream;
@@ -168,6 +171,11 @@ struct hdac_softc {
 
 	struct hdac_mem	mem;
 	struct hdac_irq	irq;
+	device_t	hdmi_dev;
+	bus_space_handle_t hdmi_handle;
+	bus_size_t	hdmi_size;
+	uint32_t	hdmi_control[2];
+	u_int		hdmi_users[2];
 
 	uint32_t	quirks_on;
 	uint32_t	quirks_off;
