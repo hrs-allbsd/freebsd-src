@@ -407,9 +407,6 @@ hym8563_init(void *arg)
 		device_printf(sc->dev, "Cannot read CTRL2 register: %d\n", rv);
 		return;
 	}
-	rv &= ~HYM8563_CTRL2_TI_TP;
-	rv &= ~HYM8563_CTRL2_AF;
-	rv &= ~HYM8563_CTRL2_TF;
 	rv = hym8563_write_1(sc->dev, HYM8563_CTRL2, 0);
 	if (rv != 0) {
 		device_printf(sc->dev, "Cannot write CTRL2 register: %d\n", rv);
