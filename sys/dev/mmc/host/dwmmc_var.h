@@ -65,6 +65,9 @@ struct dwmmc_softc {
 	uint32_t		hwtype;
 	uint32_t		use_auto_stop;
 	uint32_t		use_pio;
+	bool			pio_read_batch;
+	uint64_t		pio_read_status, pio_read_words;
+	uint64_t		pio_read_bulk, pio_read_fallbacks;
 	device_t		child;
 	struct task		card_task;	/* Card presence check task */
 	struct timeout_task	card_delayed_task;/* Card insert delayed task */

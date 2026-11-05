@@ -1,4 +1,5 @@
 /*-
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * Copyright (c) 2014-2019 Ruslan Bukin <br@bsdpad.com>
  * All rights reserved.
  *
@@ -46,6 +47,7 @@
 #include <sys/rman.h>
 #include <sys/queue.h>
 #include <sys/taskqueue.h>
+#include <sys/sysctl.h>
 
 #include <dev/mmc/bridge.h>
 #include <dev/mmc/mmcbrvar.h>
@@ -64,6 +66,7 @@
 
 #include <dev/mmc/host/dwmmc_reg.h>
 #include <dev/mmc/host/dwmmc_var.h>
+#include <dev/mmc/host/dwmmc_pio_batch.h>
 
 #include "opt_mmccam.h"
 
@@ -743,6 +746,18 @@ dwmmc_attach(device_t dev)
 	/* Maximum timeout */
 	WRITE4(sc, SDMMC_TMOUT, 0xffffffff);
 
+	sc->pio_read_batch = OF_hasprop(ofw_bus_get_node(dev),
+	    "freebsd,pio-read-batch");
+#define DWMMC_PIO_COUNTER(name) \
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev), \
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, \
+	    #name, CTLFLAG_RD, &sc->name, 0, "Opt-in PIO read " #name)
+	DWMMC_PIO_COUNTER(pio_read_status);
+	DWMMC_PIO_COUNTER(pio_read_words);
+	DWMMC_PIO_COUNTER(pio_read_bulk);
+	DWMMC_PIO_COUNTER(pio_read_fallbacks);
+#undef DWMMC_PIO_COUNTER
+
 	TASK_INIT(&sc->card_task, 0, dwmmc_card_task, sc);
 	TIMEOUT_TASK_INIT(taskqueue_bus, &sc->card_delayed_task, 0,
 		dwmmc_card_task, sc);
@@ -1052,7 +1067,7 @@ static void
 pio_read(struct dwmmc_softc *sc, struct mmc_command *cmd)
 {
 	struct mmc_data *data;
-	uint32_t *p, status;
+	uint32_t *p, status, words;
 
 	if (cmd == NULL || cmd->data == NULL)
 		return;
@@ -1066,8 +1081,31 @@ pio_read(struct dwmmc_softc *sc, struct mmc_command *cmd)
 
 	while (data->xfer_len < data->len) {
 		status = READ4(sc, SDMMC_STATUS);
+		if (sc->pio_read_batch)
+			sc->pio_read_status++;
 		if (status & SDMMC_STATUS_FIFO_EMPTY)
 			break;
+		if (sc->pio_read_batch && (data->len & 3) == 0) {
+			words = dwmmc_pio_batch_words(status,
+			    (data->len - data->xfer_len) >> 2, sc->fifo_depth);
+			if (words == 0) {
+				/*
+				 * Use the original single-word read when the
+				 * occupancy field is inconsistent.
+				 */
+				words = 1;
+				sc->pio_read_fallbacks++;
+			}
+			if (words > 1) {
+				bus_read_multi_4(sc->res[0], SDMMC_DATA, p, words);
+				sc->pio_read_bulk++;
+			} else
+				*p = READ4(sc, SDMMC_DATA);
+			p += words;
+			data->xfer_len += words << 2;
+			sc->pio_read_words += words;
+			continue;
+		}
 		*p++ = READ4(sc, SDMMC_DATA);
 		data->xfer_len += 4;
 	}
