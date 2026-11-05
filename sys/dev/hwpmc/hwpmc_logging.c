@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005-2007 Joseph Koshy
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * Copyright (c) 2007 The FreeBSD Foundation
  * Copyright (c) 2018 Matthew Macy
  * All rights reserved.
@@ -881,9 +882,17 @@ pmclog_close(struct pmc_owner *po)
 
 	PMCDBG1(LOG,CLO,1, "po=%p", po);
 
-	pmclog_process_closelog(po);
-
 	mtx_lock(&pmc_kthread_mtx);
+	if ((po->po_flags & PMC_PO_SHUTDOWN) != 0) {
+		mtx_unlock(&pmc_kthread_mtx);
+		return (0);
+	}
+	/*
+	 * Readers stop at CLOSELOG. Queue every CPU's pending records before
+	 * that marker, otherwise valid samples following it are invisible.
+	 */
+	pmclog_schedule_all(po);
+	pmclog_process_closelog(po);
 	/*
 	 * Initiate shutdown: no new data queued,
 	 * thread will close file on last block.
@@ -892,11 +901,19 @@ pmclog_close(struct pmc_owner *po)
 	/* give time for all to see */
 	DELAY(50);
 	
-	/*
-	 * Schedule the current buffer.
-	 */
-	pmclog_schedule_all(po);
 	wakeup_one(po);
+	/*
+	 * A file consumer can deconfigure immediately after this call.
+	 * Wait for regular-file writes so deconfiguration cannot discard
+	 * queued records. Pipes/sockets stay asynchronous: their consumer
+	 * must be able to drain data after close returns.
+	 */
+	if (po->po_file != NULL && po->po_file->f_type == DTYPE_VNODE &&
+	    po->po_file->f_vnode->v_type == VREG) {
+		while (po->po_kthread != NULL)
+			msleep(po->po_kthread, &pmc_kthread_mtx, PPAUSE,
+			    "pmclcl", 0);
+	}
 
 	mtx_unlock(&pmc_kthread_mtx);
 
