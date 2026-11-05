@@ -625,7 +625,7 @@ dma4_init(struct dwc_softc *sc)
 	int error;
 	int idx;
 
-	WRITE4(sc, ETH_MACQ0TXFCR, 0xffff << 16 | 1);
+	WRITE4(sc, ETH_MACQ0TXFCR, 0xffffU << 16 | 1);
 	WRITE4(sc, ETH_MACRXFCR, 1);
 
 	reg = READ4(sc, ETH_DMACCR(0));
