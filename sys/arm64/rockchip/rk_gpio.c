@@ -1,6 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * Copyright (c) 2018 Emmanuel Vadot <manu@FreeBSD.org>
  * Copyright (c) 2021 Soren Schmidt <sos@deepcore.dk>
  *
@@ -325,11 +326,13 @@ rk_gpio_attach(device_t dev)
 	}
 
 	/*
-	 * RK3568 has GPIO_VER_ID register, however both
+	 * RK3528 (V2_1) and RK3568 have the same split-word GPIO layout.
+	 * Both have GPIO_VER_ID, however
 	 * RK3328 and RK3399 doesn't have. So choose the
 	 * version based on parent's compat string.
 	 */
-	if (ofw_bus_node_is_compatible(parent_node, "rockchip,rk3568-pinctrl"))
+	if (ofw_bus_node_is_compatible(parent_node, "rockchip,rk3568-pinctrl") ||
+	    ofw_bus_node_is_compatible(parent_node, "rockchip,rk3528-pinctrl"))
 		sc->version = RK_GPIO_TYPE_V2;
 	else
 		sc->version = RK_GPIO_TYPE_V1;
