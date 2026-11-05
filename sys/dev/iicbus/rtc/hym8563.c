@@ -433,7 +433,7 @@ hym8563_probe(device_t dev)
 		return (ENXIO);
 
 	if (ofw_bus_search_compatible(dev, compat_data)->ocd_data != 0) {
-		device_set_desc(dev, "HYM8694 RTC");
+		device_set_desc(dev, "HYM8563 RTC");
 		return (BUS_PROBE_DEFAULT);
 	}
 #endif
