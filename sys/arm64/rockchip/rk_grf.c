@@ -41,6 +41,7 @@
 #include <dev/fdt/simple_mfd.h>
 
 static struct ofw_compat_data compat_data[] = {
+	{"rockchip,rk3528-ioc-grf", 1},
 	{"rockchip,rk3288-grf", 1},
 	{"rockchip,rk3328-grf", 1},
 	{"rockchip,rk3399-grf", 1},
