@@ -1,6 +1,8 @@
 /*-
  * SPDX-License-Identifier: BSD-4-Clause
  *
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
+ *
  * Copyright (c) 1997, 1998-2003
  *	Bill Paul <wpaul@windriver.com>.  All rights reserved.
  *
@@ -1210,6 +1212,55 @@ re_allocmem(device_t dev, struct rl_softc *sc)
 }
 
 /*
+ * Allow a board or loader to supply a MAC address independently of EEPROM.
+ */
+static int
+re_parse_eaddr_hint(const char *text, uint8_t eaddr[ETHER_ADDR_LEN])
+{
+	uint8_t parsed[ETHER_ADDR_LEN];
+	unsigned value;
+	char c;
+
+	if (strlen(text) != ETHER_ADDR_LEN * 3 - 1)
+		return (EINVAL);
+	for (unsigned i = 0; i < ETHER_ADDR_LEN; i++) {
+		value = 0;
+		for (unsigned j = 0; j < 2; j++) {
+			c = text[i * 3 + j];
+			value <<= 4;
+			if (c >= '0' && c <= '9')
+				value |= c - '0';
+			else if (c >= 'a' && c <= 'f')
+				value |= c - 'a' + 10;
+			else if (c >= 'A' && c <= 'F')
+				value |= c - 'A' + 10;
+			else
+				return (EINVAL);
+		}
+		parsed[i] = value;
+		if (i != ETHER_ADDR_LEN - 1 && text[i * 3 + 2] != ':')
+			return (EINVAL);
+	}
+	if (ETHER_IS_ZERO(parsed) || ETHER_IS_MULTICAST(parsed))
+		return (EINVAL);
+	memcpy(eaddr, parsed, sizeof(parsed));
+	return (0);
+}
+
+static void
+re_get_eaddr_hint(device_t dev, uint8_t eaddr[ETHER_ADDR_LEN])
+{
+	const char *text;
+
+	if (resource_string_value(device_get_name(dev), device_get_unit(dev),
+		"mac", &text) != 0)
+		return;
+	if (re_parse_eaddr_hint(text, eaddr) != 0)
+		device_printf(dev,
+		    "Invalid MAC address hint; retaining hardware/fallback address\n");
+}
+
+/*
  * Attach the interface. Allocate softc structures, do ifmedia
  * setup and ethernet/BPF attach.
  */
@@ -1679,6 +1730,8 @@ re_attach(device_t dev)
 		device_printf(dev, "attaching PHYs failed\n");
 		goto fail;
 	}
+
+	re_get_eaddr_hint(dev, eaddr);
 
 	/* If address was not found, create one based on the hostid and name. */
 	if (ETHER_IS_ZERO(eaddr)) {
