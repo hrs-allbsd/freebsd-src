@@ -67,6 +67,7 @@
 #include <dev/mmc/host/dwmmc_reg.h>
 #include <dev/mmc/host/dwmmc_var.h>
 #include <dev/mmc/host/dwmmc_pio_batch.h>
+#include <dev/mmc/host/dwmmc_idmac.h>
 
 #include "opt_mmccam.h"
 
@@ -212,12 +213,32 @@ static void
 dwmmc_ring_setup(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 {
 	struct dwmmc_softc *sc;
+	size_t total;
 	int idx;
 
 	sc = arg;
-	dprintf("nsegs %d seg0len %lu\n", nsegs, segs[0].ds_len);
+	sc->dma_map_error = error;
 	if (error != 0)
-		panic("%s: error != 0 (%d)\n", __func__, error);
+		return;
+	sc->dma_map_loaded = true;
+	if (nsegs < 1 || nsegs > IDMAC_DESC_SEGS) {
+		sc->dma_map_error = EFBIG;
+		return;
+	}
+	/* Validate the entire mapping before publishing any OWN bit. */
+	total = 0;
+	for (idx = 0; idx < nsegs; idx++) {
+		if (!dwmmc_idmac_segment_valid(segs[idx].ds_addr,
+		    segs[idx].ds_len)) {
+			sc->dma_map_error = EINVAL;
+			return;
+		}
+		total += segs[idx].ds_len;
+	}
+	if (total != sc->curcmd->data->len) {
+		sc->dma_map_error = EINVAL;
+		return;
+	}
 
 	for (idx = 0; idx < nsegs; idx++) {
 		sc->desc_ring[idx].des0 = DES0_DIC | DES0_CH;
@@ -1005,6 +1026,7 @@ dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 	    BUS_DMASYNC_POSTWRITE);
 
 	bus_dmamap_unload(sc->buf_tag, sc->buf_map);
+	sc->dma_map_loaded = false;
 
 	return (0);
 }
@@ -1040,11 +1062,18 @@ dma_prepare(struct dwmmc_softc *sc, struct mmc_command *cmd)
 	reg &= ~(SDMMC_INTMASK_TXDR | SDMMC_INTMASK_RXDR);
 	WRITE4(sc, SDMMC_INTMASK, reg);
 	dprintf("%s: bus_dmamap_load size: %zu\n", __func__, data->len);
+	sc->dma_map_error = 0;
+	sc->dma_map_loaded = false;
 	err = bus_dmamap_load(sc->buf_tag, sc->buf_map,
 		data->data, data->len, dwmmc_ring_setup,
 		sc, BUS_DMA_NOWAIT);
-	if (err != 0)
-		panic("dmamap_load failed\n");
+	if (err != 0 || sc->dma_map_error != 0) {
+		if (sc->dma_map_loaded) {
+			bus_dmamap_unload(sc->buf_tag, sc->buf_map);
+			sc->dma_map_loaded = false;
+		}
+		return (err != 0 ? err : sc->dma_map_error);
+	}
 
 	/* Ensure the device can see the desc */
 	bus_dmamap_sync(sc->desc_tag, sc->desc_map,
@@ -1255,7 +1284,14 @@ dwmmc_start_cmd(struct dwmmc_softc *sc, struct mmc_command *cmd)
 		if (sc->use_pio) {
 			pio_prepare(sc, cmd);
 		} else {
-			dma_prepare(sc, cmd);
+			if (dma_prepare(sc, cmd) != 0) {
+				cmd->error = MMC_ERR_FAILED;
+				sc->cmd_done = 1;
+				/* No command was issued, so no stop is needed. */
+				sc->flags &= ~PENDING_STOP;
+				dwmmc_tasklet(sc);
+				return;
+			}
 		}
 		wmb();
 	}
