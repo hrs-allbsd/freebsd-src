@@ -548,7 +548,8 @@ dwc_attach(device_t dev)
 	struct dwc_softc *sc;
 	if_t ifp;
 	int error;
-	uint32_t pbl;
+	uint32_t pbl, phy_xref, phy_reg;
+	int phy_addr;
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
@@ -557,6 +558,17 @@ dwc_attach(device_t dev)
 	sc->tx_mapcount = 0;
 
 	sc->node = ofw_bus_get_node(dev);
+	phy_addr = MII_PHY_ANY;
+	if (OF_hasprop(sc->node, "phy-handle")) {
+		if (OF_getencprop(sc->node, "phy-handle", &phy_xref,
+		    sizeof(phy_xref)) != sizeof(phy_xref) ||
+		    OF_getencprop(OF_node_from_xref(phy_xref), "reg", &phy_reg,
+		    sizeof(phy_reg)) != sizeof(phy_reg) || phy_reg >= MII_NPHY) {
+			device_printf(dev, "Invalid PHY address\n");
+			return (ENXIO);
+		}
+		phy_addr = phy_reg;
+	}
 	sc->phy_mode = mii_fdt_get_contype(sc->node);
 	switch (sc->phy_mode) {
 	case MII_CONTYPE_RGMII:
@@ -673,7 +685,7 @@ dwc_attach(device_t dev)
 
 	/* Attach the mii driver. */
 	error = mii_attach(dev, &sc->miibus, ifp, dwc_media_change,
-	    dwc_media_status, BMSR_DEFCAPMASK, MII_PHY_ANY,
+	    dwc_media_status, BMSR_DEFCAPMASK, phy_addr,
 	    MII_OFFSET_ANY, 0);
 
 	if (error != 0) {
