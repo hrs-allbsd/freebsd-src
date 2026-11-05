@@ -32,6 +32,8 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "opt_platform.h"
+
 #include <sys/cdefs.h>
 /*
  * Driver for the Realtek 8169S/8110S/8211B/8211C internal 10/100/1000 PHY.
@@ -52,6 +54,10 @@
 
 #include <dev/mii/mii.h>
 #include <dev/mii/miivar.h>
+#ifdef FDT
+#include <dev/ofw/openfirm.h>
+#include <dev/mii/mii_fdt.h>
+#endif
 #include "miidevs.h"
 
 #include <dev/mii/rgephyreg.h>
@@ -60,6 +66,13 @@
 
 #include <machine/bus.h>
 #include <dev/rl/if_rlreg.h>
+
+struct rgephy_softc {
+	struct mii_softc mii_sc;
+#ifdef FDT
+	mii_contype_t contype;
+#endif
+};
 
 static int rgephy_probe(device_t);
 static int rgephy_attach(device_t);
@@ -76,7 +89,7 @@ static device_method_t rgephy_methods[] = {
 static driver_t rgephy_driver = {
 	"rgephy",
 	rgephy_methods,
-	sizeof(struct mii_softc)
+	sizeof(struct rgephy_softc)
 };
 
 DRIVER_MODULE(rgephy, miibus, rgephy_driver, 0, 0);
@@ -123,6 +136,18 @@ rgephy_attach(device_t dev)
 	else if (mii_dev_mac_match(dev, "ure"))
 		flags |= MIIF_PHYPRIV1;
 	mii_phy_dev_attach(dev, flags, &rgephy_funcs, 0);
+#ifdef FDT
+	/* Read OF properties before reset can run with the MAC mutex held. */
+	if (sc->mii_mpd_rev == RGEPHY_8211F &&
+	    (flags & (MIIF_PHYPRIV0 | MIIF_PHYPRIV1)) == 0) {
+		mii_fdt_phy_config_t *cfg;
+
+		cfg = mii_fdt_get_config(dev);
+		if (cfg->macnode > 0)
+			((struct rgephy_softc *)sc)->contype = cfg->con_type;
+		mii_fdt_free_config(cfg);
+	}
+#endif
 
 	/* RTL8169S do not report auto-sense; add manually. */
 	sc->mii_capabilities = (PHY_READ(sc, MII_BMSR) | BMSR_ANEG) &
@@ -554,6 +579,26 @@ rgephy_reset(struct mii_softc *sc)
 
 	mii_phy_reset(sc);
 	DELAY(1000);
+#ifdef FDT
+	/* RTL8211F RGMII delays must survive every autonegotiation reset. */
+	if (sc->mii_mpd_rev == RGEPHY_8211F &&
+	    (sc->mii_flags & (MIIF_PHYPRIV0 | MIIF_PHYPRIV1)) == 0) {
+		mii_contype_t contype = ((struct rgephy_softc *)sc)->contype;
+		uint16_t page, tx, rx;
+
+		if (mii_contype_is_rgmii(contype)) {
+			tx = (contype == MII_CONTYPE_RGMII_ID ||
+			    contype == MII_CONTYPE_RGMII_TXID) ? (1 << 8) : 0;
+			rx = (contype == MII_CONTYPE_RGMII_ID ||
+			    contype == MII_CONTYPE_RGMII_RXID) ? (1 << 3) : 0;
+			page = PHY_READ(sc, 0x1f);
+			PHY_WRITE(sc, 0x1f, 0xd08);
+			PHY_WRITE(sc, 0x11, (PHY_READ(sc, 0x11) & ~(1 << 8)) | tx);
+			PHY_WRITE(sc, 0x15, (PHY_READ(sc, 0x15) & ~(1 << 3)) | rx);
+			PHY_WRITE(sc, 0x1f, page);
+		}
+	}
+#endif
 	rgephy_load_dspcode(sc);
 }
 
