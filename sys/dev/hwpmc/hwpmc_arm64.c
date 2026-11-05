@@ -1,5 +1,6 @@
 /*-
  * Copyright (c) 2015 Ruslan Bukin <br@bsdpad.com>
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * All rights reserved.
  *
  * This software was developed by the University of Cambridge Computer
@@ -28,6 +29,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/counter.h>
 #include <sys/systm.h>
 #include <sys/pmc.h>
 #include <sys/pmckern.h>
@@ -422,6 +424,11 @@ arm64_intr(struct trapframe *tf)
 		/* Reload sampling count */
 		arm64_write_pmc(cpu, ri, pm, pm->pm_sc.pm_reloadcount);
 	}
+
+	if (retval)
+		counter_u64_add(pmc_stats.pm_intr_processed, 1);
+	else
+		counter_u64_add(pmc_stats.pm_intr_ignored, 1);
 
 	return (retval);
 }
