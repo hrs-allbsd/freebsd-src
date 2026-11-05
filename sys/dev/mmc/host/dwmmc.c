@@ -177,7 +177,9 @@ dwmmc_get1paddr(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 	if (error != 0)
 		return;
 	sc->desc_map_loaded = true;
-	if (nsegs != 1) {
+	if (nsegs != 1 || segs[0].ds_len != IDMAC_DESC_SIZE ||
+	    (segs[0].ds_addr & (IDMAC_DESC_SIZE - 1)) != 0 ||
+	    segs[0].ds_addr > 0xffffffffULL - (IDMAC_DESC_SIZE - 1)) {
 		sc->dma_map_error = EINVAL;
 		return;
 	}
