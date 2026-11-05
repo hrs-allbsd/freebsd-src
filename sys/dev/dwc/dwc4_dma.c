@@ -1,4 +1,5 @@
 /*-
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * Copyright (c) 2026 Ruslan Bukin <br@bsdpad.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -635,10 +636,23 @@ dma4_init(struct dwc_softc *sc)
 		reg |= DMACCR_PBLX8;
 	WRITE4(sc, ETH_DMACCR(0), reg);
 
-	WRITE4(sc, ETH_DMACTXCR(0), 0);
+	/* Honor the common DT/default PBL settings, as the GMAC1000 path
+	 * does. Writing zero here discarded both parsed burst lengths. */
+	if (sc->txpbl == 0 || sc->txpbl > 32 ||
+	    (sc->txpbl & (sc->txpbl - 1)) != 0 ||
+	    sc->rxpbl == 0 || sc->rxpbl > 32 ||
+	    (sc->rxpbl & (sc->rxpbl - 1)) != 0) {
+		device_printf(sc->dev, "invalid DMA burst length tx=%u rx=%u\n",
+		    sc->txpbl, sc->rxpbl);
+		return (EINVAL);
+	}
+	WRITE4(sc, ETH_DMACTXCR(0), sc->txpbl << DMACTXCR_TXPBL_S);
 
-	reg = (MCLBYTES << DMACRXCR_RBSZ_S);
+	reg = (MCLBYTES << DMACRXCR_RBSZ_S) |
+	    (sc->rxpbl << DMACRXCR_RXPBL_S);
 	WRITE4(sc, ETH_DMACRXCR(0), reg);
+	device_printf(sc->dev, "DMA burst tx=%u rx=%u multiplier=%u\n",
+	    sc->txpbl, sc->rxpbl, sc->nopblx8 ? 1 : 8);
 
 	reg = DMASBMR_BLEN4;
 	reg |= DMASBMR_BLEN8;
