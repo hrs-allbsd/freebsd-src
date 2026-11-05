@@ -118,7 +118,7 @@
 #define	DES0_CH		(1 << 4)	/* second address CHained */
 #define	DES0_ER		(1 << 5)	/* End of Ring */
 #define	DES0_CES	(1 << 30)	/* Card Error Summary */
-#define	DES0_OWN	(1 << 31)	/* OWN */
+#define	DES0_OWN	(1U << 31)	/* OWN */
 
 #define	DES1_BS1_MASK	0x1fff
 
