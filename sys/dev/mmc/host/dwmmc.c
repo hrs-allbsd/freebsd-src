@@ -781,7 +781,8 @@ dwmmc_attach(device_t dev)
 	}
 
 	if (!sc->use_pio) {
-		dma_stop(sc);
+		if (dma_stop(sc) != 0)
+			return (ENXIO);
 		if (dma_setup(sc))
 			return (ENXIO);
 
@@ -1039,9 +1040,10 @@ static int
 dma_stop(struct dwmmc_softc *sc)
 {
 	int reg;
+	int i;
 
 	reg = READ4(sc, SDMMC_CTRL);
-	reg &= ~(SDMMC_CTRL_USE_IDMAC);
+	reg &= ~(SDMMC_CTRL_USE_IDMAC | SDMMC_CTRL_DMA_ENABLE);
 	reg |= (SDMMC_CTRL_DMA_RESET);
 	WRITE4(sc, SDMMC_CTRL, reg);
 
@@ -1050,7 +1052,13 @@ dma_stop(struct dwmmc_softc *sc)
 	reg |= (SDMMC_BMOD_SWR);
 	WRITE4(sc, SDMMC_BMOD, reg);
 
-	return (0);
+	for (i = 0; i < 100; i++) {
+		if ((READ4(sc, SDMMC_CTRL) & SDMMC_CTRL_DMA_RESET) == 0 &&
+		    (READ4(sc, SDMMC_BMOD) & SDMMC_BMOD_SWR) == 0)
+			return (0);
+		DELAY(10);
+	}
+	return (ETIMEDOUT);
 }
 
 static int
