@@ -2204,6 +2204,8 @@ re_rxeof(struct rl_softc *sc, int *rx_npktsp)
 		rxstat = le32toh(cur_rx->rl_cmdstat);
 		if ((rxstat & RL_RDESC_STAT_OWN) != 0)
 			break;
+		/* Bound descriptor work, including discarded/error frames. */
+		maxpkt--;
 		total_len = rxstat & sc->rl_rxlenmask;
 		rxvlan = le32toh(cur_rx->rl_vlanctl);
 		if (jumbo != 0)
@@ -2385,7 +2387,6 @@ re_rxeof(struct rl_softc *sc, int *rx_npktsp)
 				}
 			}
 		}
-		maxpkt--;
 		if (rxvlan & RL_RDESC_VLANCTL_TAG) {
 			m->m_pkthdr.ether_vtag =
 			    bswap16((rxvlan & RL_RDESC_VLANCTL_DATA));
@@ -2407,7 +2408,7 @@ re_rxeof(struct rl_softc *sc, int *rx_npktsp)
 
 	if (rx_npktsp != NULL)
 		*rx_npktsp = rx_npkts;
-	if (maxpkt)
+	if (maxpkt == 0)
 		return (EAGAIN);
 
 	return (0);
@@ -2622,8 +2623,8 @@ re_int_task(void *arg, int npending)
 	}
 #endif
 
-	if (status & (RL_ISR_RX_OK|RL_ISR_RX_ERR|RL_ISR_FIFO_OFLOW))
-		rval = re_rxeof(sc, NULL);
+	/* A budget continuation may have no new interrupt status. */
+	rval = re_rxeof(sc, NULL);
 
 	/*
 	 * Some chips will ignore a second TX request issued
@@ -2636,14 +2637,7 @@ re_int_task(void *arg, int npending)
 	if ((status & (RL_ISR_TX_OK | RL_ISR_TX_DESC_UNAVAIL)) &&
 	    (sc->rl_flags & RL_FLAG_PCIE))
 		CSR_WRITE_1(sc, sc->rl_txstart, RL_TXSTART_START);
-	if (status & (
-#ifdef RE_TX_MODERATION
-	    RL_ISR_TIMEOUT_EXPIRED|
-#else
-	    RL_ISR_TX_OK|
-#endif
-	    RL_ISR_TX_ERR|RL_ISR_TX_DESC_UNAVAIL))
-		re_txeof(sc);
+	re_txeof(sc);
 
 	if (status & RL_ISR_SYSTEM_ERR) {
 		if_setdrvflagbits(ifp, 0, IFF_DRV_RUNNING);
@@ -2653,14 +2647,16 @@ re_int_task(void *arg, int npending)
 	if (!if_sendq_empty(ifp))
 		re_start_locked(ifp);
 
-	RL_UNLOCK(sc);
-
-        if ((CSR_READ_2(sc, RL_ISR) & RL_INTRS_CPLUS) || rval) {
-		taskqueue_enqueue(taskqueue_fast, &sc->rl_inttask);
-		return;
+	/* Keep rearm serialized with stop/suspend and drain budget continuations. */
+	if (!sc->suspended &&
+	    (if_getdrvflags(ifp) & IFF_DRV_RUNNING) != 0) {
+		if ((CSR_READ_2(sc, RL_ISR) & RL_INTRS_CPLUS) != 0 ||
+		    rval == EAGAIN)
+			taskqueue_enqueue(taskqueue_fast, &sc->rl_inttask);
+		else
+			CSR_WRITE_2(sc, RL_IMR, RL_INTRS_CPLUS);
 	}
-
-	CSR_WRITE_2(sc, RL_IMR, RL_INTRS_CPLUS);
+	RL_UNLOCK(sc);
 }
 
 static void
