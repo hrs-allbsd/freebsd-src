@@ -3148,6 +3148,13 @@ re_init(void *xsc)
 	RL_UNLOCK(sc);
 }
 
+static bool
+re_is_8168h(struct rl_softc *sc)
+{
+	return (sc->rl_hwrev->rl_rev == RL_HWREV_8168H &&
+	    pci_get_device(sc->rl_dev) == RT_DEVICEID_8168);
+}
+
 static void
 re_init_locked(struct rl_softc *sc)
 {
@@ -3437,6 +3444,23 @@ re_ifmedia_upd(if_t ifp)
 	mii = device_get_softc(sc->rl_miibus);
 	RL_LOCK(sc);
 	error = mii_mediachg(mii);
+	/*
+	 * RTL8168H clears MAC enables when its PHY is powered down.  A
+	 * subsequent PHY media change does not restore the DMA engines.
+	 * Rebuild rings after power-up, before queued traffic can time out.
+	 * Keep an explicit media-none request and other revisions unchanged.
+	 */
+	if (error == 0 && re_is_8168h(sc) &&
+	    (if_getdrvflags(ifp) & IFF_DRV_RUNNING) != 0 &&
+	    IFM_SUBTYPE(mii->mii_media.ifm_media) != IFM_NONE &&
+	    (CSR_READ_1(sc, RL_COMMAND) & (RL_CMD_TX_ENB | RL_CMD_RX_ENB)) !=
+	    (RL_CMD_TX_ENB | RL_CMD_RX_ENB)) {
+		device_printf(sc->rl_dev, "reinitializing MAC after PHY power-up\n");
+		if_setdrvflagbits(ifp, 0, IFF_DRV_RUNNING);
+		re_init_locked(sc);
+		if ((if_getdrvflags(ifp) & IFF_DRV_RUNNING) == 0)
+			error = ENXIO;
+	}
 	RL_UNLOCK(sc);
 
 	return (error);
