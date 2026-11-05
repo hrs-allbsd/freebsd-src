@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * Copyright 2017 Emmanuel Vadot <manu@freebsd.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -47,9 +48,11 @@
 enum RKTYPE {
 	RK2928 = 1,
 	RK3288,
+	RK3528,
 };
 
 static struct ofw_compat_data compat_data[] = {
+	{"rockchip,rk3528-dw-mshc",	RK3528},
 	{"rockchip,rk2928-dw-mshc",	RK2928},
 	{"rockchip,rk3288-dw-mshc",	RK3288},
 	{NULL,				0},
@@ -86,6 +89,7 @@ rockchip_dwmmc_attach(device_t dev)
 
 	switch (type) {
 	case RK2928:
+	case RK3528:
 		sc->use_pio = 1;
 		break;
 	}
