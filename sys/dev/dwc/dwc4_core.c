@@ -1,4 +1,5 @@
 /*-
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * Copyright (c) 2026 Ruslan Bukin <br@bsdpad.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -387,7 +388,10 @@ void
 dwc4_harvest_stats(struct dwc_softc *sc)
 {
 	if_t ifp __unused;
-	int val;
+	uint64_t val;
+	uint32_t control;
+
+	DWC_ASSERT_LOCKED(sc);
 
 	/* We don't need to harvest too often. */
 	if (++sc->stats_harvest_count < STATS_HARVEST_INTERVAL)
@@ -395,6 +399,17 @@ dwc4_harvest_stats(struct dwc_softc *sc)
 
 	sc->stats_harvest_count = 0;
 	ifp = sc->ifp;
+
+	/*
+	 * Snapshot related MMC registers with the hardware frozen. A good
+	 * packet can otherwise arrive between the total and good TX reads,
+	 * producing a negative error delta that wraps the interface counter.
+	 * Keep the freeze through reset and restore the prior control flags.
+	 */
+	control = READ4(sc, ETH_MMC_CONTROL);
+	WRITE4(sc, ETH_MMC_CONTROL, control | MMC_CONTROL_CNTFREEZ);
+	/* Complete the freeze before reading the counters. */
+	(void)READ4(sc, ETH_MMC_CONTROL);
 
 	val = READ4(sc, ETH_RX_RECEIVE_ERROR);
 	if_inc_counter(ifp, IFCOUNTER_IERRORS, val);
@@ -410,6 +425,8 @@ dwc4_harvest_stats(struct dwc_softc *sc)
 	if_inc_counter(ifp, IFCOUNTER_COLLISIONS, val);
 
 	dwc4_clear_stats(sc);
+	(void)READ4(sc, ETH_MMC_CONTROL); /* Complete reset while frozen. */
+	WRITE4(sc, ETH_MMC_CONTROL, control);
 }
 
 void

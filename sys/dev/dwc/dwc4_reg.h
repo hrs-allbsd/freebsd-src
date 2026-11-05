@@ -107,6 +107,7 @@
 #define	ETH_MACA3LR		0x031C
 #define	ETH_MMC_CONTROL		0x0700
 #define	 MMC_CONTROL_CNTRST	(1 << 0) /* Counters Reset */
+#define	 MMC_CONTROL_CNTFREEZ	(1 << 3) /* Freeze all MMC counters */
 #define	ETH_MMC_RX_INTERRUPT			0x0704
 #define	ETH_MMC_TX_INTERRUPT			0x0708
 #define	ETH_MMC_RX_INTERRUPT_MASK		0x070C
