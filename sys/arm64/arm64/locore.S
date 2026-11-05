@@ -444,9 +444,23 @@ LENTRY(enter_kernel_el)
 	ldr	x3, =(CNTHCTL_EL1PCTEN_NOTRAP | CNTHCTL_EL1PCEN_NOTRAP)
 	ldr	x5, =(PSR_DAIF | PSR_M_EL1h)
 
-	/* Enable SPE at EL1 via Monitor Debug Configuration Register */
-	mov     x6, MDCR_EL2_E2PB_EL1_0_NO_TRAP
-	msr     mdcr_el2, x6
+	/*
+	 * Expose implemented PMU counters to EL1. There PMCR_EL0.N is
+	 * read from MDCR_EL2.HPMN, so clearing HPMN hides all counters.
+	 * Do not access PMCR_EL0 when the architectural PMU is absent.
+	 */
+	mov	x6, xzr
+	mrs	x7, id_aa64dfr0_el1
+	ubfx	x7, x7, #ID_AA64DFR0_PMUVer_SHIFT, #ID_AA64DFR0_PMUVer_WIDTH
+	cbz	x7, .Lno_pmu
+	cmp	x7, #0xf	/* Implementation-defined PMU */
+	b.eq	.Lno_pmu
+	mrs	x6, pmcr_el0
+	ubfx	x6, x6, #PMCR_N_SHIFT, #5
+.Lno_pmu:
+	/* Enable SPE at EL1 via Monitor Debug Configuration Register. */
+	orr	x6, x6, #MDCR_EL2_E2PB_EL1_0_NO_TRAP
+	msr	mdcr_el2, x6
 
 .Ldone_vhe:
 
