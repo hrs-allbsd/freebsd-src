@@ -348,7 +348,7 @@ hym8563_settime(device_t dev, struct timespec *ts)
 	struct hym8563_softc	*sc;
 	struct bcd_clocktime 	 bct;
 	uint8_t			 buf[7];
-	int 			 rv;
+	int 			 rv, restart_error;
 
 	sc = device_get_softc(dev);
 	ts->tv_sec -= utc_offset();
@@ -374,20 +374,14 @@ hym8563_settime(device_t dev, struct timespec *ts)
 
 	/* Write all RTC data */
 	rv = hym8563_write_buf(sc->dev, HYM8563_SEC, buf, sizeof(buf));
-	if (rv != 0) {
+	if (rv != 0)
 		device_printf(sc->dev, "Cannot write time registers: %d\n", rv);
-		return (rv);
-	}
-	return (rv);
 
-	/* Start RTC again */
-	rv = hym8563_write_1(sc->dev, HYM8563_CTRL1, 0);
-	if (rv != 0) {
-		device_printf(sc->dev, "Cannot write CTRL1 register: %d\n", rv);
-		return (rv);
-	}
-
-	return (0);
+	/* Restart even after a failed data write; do not leave STOP asserted. */
+	restart_error = hym8563_write_1(sc->dev, HYM8563_CTRL1, 0);
+	if (restart_error != 0)
+		device_printf(sc->dev, "Cannot restart RTC: %d\n", restart_error);
+	return (rv != 0 ? rv : restart_error);
 }
 
 static void
