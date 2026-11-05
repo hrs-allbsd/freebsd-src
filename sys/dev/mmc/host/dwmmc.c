@@ -376,7 +376,18 @@ dwmmc_intr(void *arg)
 	DWMMC_LOCK(sc);
 
 	cmd = sc->curcmd;
-	KASSERT(cmd != NULL, ("%s: sc %p curcmd %p == NULL", __func__, sc, cmd));
+	if (cmd == NULL) {
+		/* An idle controller may still have a card-detect/summary IRQ. */
+		reg = READ4(sc, SDMMC_MINTSTS);
+		if (reg & SDMMC_INTMASK_CD)
+			dwmmc_handle_card_present(sc,
+			    READ4(sc, SDMMC_CDETECT) == 0);
+		WRITE4(sc, SDMMC_RINTSTS, reg);
+		if (!sc->use_pio)
+			WRITE4(sc, SDMMC_IDSTS, READ4(sc, SDMMC_IDSTS));
+		DWMMC_UNLOCK(sc);
+		return;
+	}
 
 	/* First handle SDMMC controller interrupts */
 	reg = READ4(sc, SDMMC_MINTSTS);
@@ -681,6 +692,9 @@ dwmmc_attach(device_t dev)
 		return (ENXIO);
 	}
 
+	/* Keep controller interrupts masked until card detection is ready. */
+	WRITE4(sc, SDMMC_INTMASK, 0);
+
 	/* Setup interrupt handler. */
 	error = bus_setup_intr(dev, sc->res[1], INTR_TYPE_NET | INTR_MPSAFE,
 	    NULL, dwmmc_intr, sc, &sc->intr_cookie);
@@ -729,17 +743,6 @@ dwmmc_attach(device_t dev)
 	/* Maximum timeout */
 	WRITE4(sc, SDMMC_TMOUT, 0xffffffff);
 
-	/* Enable interrupts */
-	WRITE4(sc, SDMMC_RINTSTS, 0xffffffff);
-	WRITE4(sc, SDMMC_INTMASK, (SDMMC_INTMASK_CMD_DONE |
-				   SDMMC_INTMASK_DTO |
-				   SDMMC_INTMASK_ACD |
-				   SDMMC_INTMASK_TXDR |
-				   SDMMC_INTMASK_RXDR |
-				   DWMMC_ERR_FLAGS |
-				   SDMMC_INTMASK_CD));
-	WRITE4(sc, SDMMC_CTRL, SDMMC_CTRL_INT_ENABLE);
-
 	TASK_INIT(&sc->card_task, 0, dwmmc_card_task, sc);
 	TIMEOUT_TASK_INIT(taskqueue_bus, &sc->card_delayed_task, 0,
 		dwmmc_card_task, sc);
@@ -752,6 +755,17 @@ dwmmc_attach(device_t dev)
 		return (ENXIO);
 	}
 #endif
+	/* Enable interrupts */
+	WRITE4(sc, SDMMC_RINTSTS, 0xffffffff);
+	WRITE4(sc, SDMMC_INTMASK, (SDMMC_INTMASK_CMD_DONE |
+				   SDMMC_INTMASK_DTO |
+				   SDMMC_INTMASK_ACD |
+				   SDMMC_INTMASK_TXDR |
+				   SDMMC_INTMASK_RXDR |
+				   DWMMC_ERR_FLAGS |
+				   SDMMC_INTMASK_CD));
+	WRITE4(sc, SDMMC_CTRL, SDMMC_CTRL_INT_ENABLE);
+
 	/*
 	 * Schedule a card detection as we won't get an interrupt
 	 * if the card is inserted when we attach
@@ -772,14 +786,23 @@ dwmmc_detach(device_t dev)
 	if (ret != 0)
 		return (ret);
 
-	taskqueue_drain(taskqueue_bus, &sc->card_task);
-	taskqueue_drain_timeout(taskqueue_bus, &sc->card_delayed_task);
+	DWMMC_LOCK(sc);
+	WRITE4(sc, SDMMC_INTMASK, 0);
+	if (!sc->use_pio)
+		WRITE4(sc, SDMMC_IDINTEN, 0);
+	WRITE4(sc, SDMMC_CTRL, READ4(sc, SDMMC_CTRL) & ~SDMMC_CTRL_INT_ENABLE);
+	DWMMC_UNLOCK(sc);
 
 	if (sc->intr_cookie != NULL) {
 		ret = bus_teardown_intr(dev, sc->res[1], sc->intr_cookie);
 		if (ret != 0)
 			return (ret);
+		sc->intr_cookie = NULL;
 	}
+
+	taskqueue_drain(taskqueue_bus, &sc->card_task);
+	taskqueue_drain_timeout(taskqueue_bus, &sc->card_delayed_task);
+
 	bus_release_resources(dev, dwmmc_spec, sc->res);
 
 	DWMMC_LOCK_DESTROY(sc);
