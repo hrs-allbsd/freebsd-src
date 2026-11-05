@@ -59,6 +59,7 @@
 
 #include <machine/bus.h>
 
+#include <dev/fdt/fdt_common.h>
 #include <dev/clk/clk.h>
 #include <dev/hwreset/hwreset.h>
 
@@ -684,6 +685,7 @@ dwc_attach(device_t dev)
 	sc->mii_softc = device_get_softc(sc->miibus);
 
 	/* All ready to run, attach the ethernet interface. */
+	fdt_ether_get_addr(sc->node, ifp, macaddr);
 	ether_ifattach(ifp, macaddr);
 	sc->is_attached = true;
 
