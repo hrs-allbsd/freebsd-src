@@ -1926,6 +1926,23 @@ re_detach(device_t dev)
 	return (0);
 }
 
+/* Publish descriptor metadata before transferring ownership to active DMA. */
+static __inline void
+re_rxdesc_publish(struct rl_softc *sc, struct rl_desc *desc, uint32_t cmdstat)
+{
+	bus_dmamap_sync(sc->rl_ldata.rl_rx_list_tag,
+	    sc->rl_ldata.rl_rx_list_map, BUS_DMASYNC_PREWRITE);
+	desc->rl_cmdstat = htole32(cmdstat | RL_RDESC_CMD_OWN);
+}
+
+static __inline void
+re_txdesc_publish(struct rl_softc *sc, struct rl_desc *desc)
+{
+	bus_dmamap_sync(sc->rl_ldata.rl_tx_list_tag,
+	    sc->rl_ldata.rl_tx_list_map, BUS_DMASYNC_PREWRITE);
+	desc->rl_cmdstat |= htole32(RL_TDESC_CMD_OWN | RL_TDESC_CMD_SOF);
+}
+
 static __inline void
 re_discard_rxbuf(struct rl_softc *sc, int idx)
 {
@@ -1943,7 +1960,7 @@ re_discard_rxbuf(struct rl_softc *sc, int idx)
 	cmdstat = rxd->rx_size;
 	if (idx == sc->rl_ldata.rl_rx_desc_cnt - 1)
 		cmdstat |= RL_RDESC_CMD_EOR;
-	desc->rl_cmdstat = htole32(cmdstat | RL_RDESC_CMD_OWN);
+	re_rxdesc_publish(sc, desc, cmdstat);
 }
 
 static int
@@ -2005,7 +2022,7 @@ re_newbuf(struct rl_softc *sc, int idx)
 	cmdstat = segs[0].ds_len;
 	if (idx == sc->rl_ldata.rl_rx_desc_cnt - 1)
 		cmdstat |= RL_RDESC_CMD_EOR;
-	desc->rl_cmdstat = htole32(cmdstat | RL_RDESC_CMD_OWN);
+	re_rxdesc_publish(sc, desc, cmdstat);
 
 	return (0);
 }
@@ -2058,7 +2075,7 @@ re_jumbo_newbuf(struct rl_softc *sc, int idx)
 	cmdstat = segs[0].ds_len;
 	if (idx == sc->rl_ldata.rl_rx_desc_cnt - 1)
 		cmdstat |= RL_RDESC_CMD_EOR;
-	desc->rl_cmdstat = htole32(cmdstat | RL_RDESC_CMD_OWN);
+	re_rxdesc_publish(sc, desc, cmdstat);
 
 	return (0);
 }
@@ -2204,6 +2221,9 @@ re_rxeof(struct rl_softc *sc, int *rx_npktsp)
 		rxstat = le32toh(cur_rx->rl_cmdstat);
 		if ((rxstat & RL_RDESC_STAT_OWN) != 0)
 			break;
+		/* Order following metadata reads after observing DMA completion. */
+		bus_dmamap_sync(sc->rl_ldata.rl_rx_list_tag,
+		    sc->rl_ldata.rl_rx_list_map, BUS_DMASYNC_POSTREAD);
 		/* Bound descriptor work, including discarded/error frames. */
 		maxpkt--;
 		total_len = rxstat & sc->rl_rxlenmask;
@@ -2943,7 +2963,7 @@ re_encap(struct rl_softc *sc, struct mbuf **m_head)
 
 	desc = &sc->rl_ldata.rl_tx_list[si];
 	/* Set SOF and transfer ownership of packet to the chip. */
-	desc->rl_cmdstat |= htole32(RL_TDESC_CMD_OWN | RL_TDESC_CMD_SOF);
+	re_txdesc_publish(sc, desc);
 
 	/*
 	 * Insure that the map for this transmission
