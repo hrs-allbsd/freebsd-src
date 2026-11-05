@@ -155,7 +155,7 @@ hym8563_clk_set_gate(struct clknode *clk, bool enable)
 		val |= HYM8563_CLKOUT_ENABLE;
 	else
 		val &= ~HYM8563_CLKOUT_ENABLE;
-	hym8563_write_1(sc->base_dev, HYM8563_CLKOUT, val);
+	rv = hym8563_write_1(sc->base_dev, HYM8563_CLKOUT, val);
 	if (rv != 0) {
 		device_printf(sc->base_dev,
 		    "Cannot write CLKOUT registers: %d\n", rv);
