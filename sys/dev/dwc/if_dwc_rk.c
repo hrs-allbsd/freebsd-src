@@ -111,6 +111,7 @@ typedef void (*if_dwc_rk_set_phy_modefn_t)(struct if_dwc_rk_softc *);
 typedef void (*if_dwc_rk_phy_powerupfn_t)(struct if_dwc_rk_softc *);
 
 struct if_dwc_rk_ops {
+	uint32_t			flags;
 	if_dwc_rk_set_delaysfn_t	set_delays;
 	if_dwc_rk_set_speedfn_t		set_speed;
 	if_dwc_rk_set_phy_modefn_t	set_phy_mode;
@@ -163,7 +164,69 @@ static struct if_dwc_rk_ops rk3399_ops = {
 	.set_speed = rk3399_set_speed,
 };
 
+/* RK3528 GMAC1: GRF offsets are relative to ff300000. */
+#define RK3528_GMAC_CON5 0x40018
+#define RK3528_GMAC_CON6 0x4001c
+
+static void
+rk3528_set_delays(struct if_dwc_rk_softc *sc)
+{
+	uint32_t enable, tx, rx;
+
+	tx = sc->tx_delay & 0xff;
+	rx = sc->rx_delay & 0xff;
+	enable = (1 << 14) | (1 << 15);
+	if (sc->base.phy_mode == MII_CONTYPE_RGMII_ID ||
+	    sc->base.phy_mode == MII_CONTYPE_RGMII_TXID)
+		enable &= ~(1 << 14);
+	if (sc->base.phy_mode == MII_CONTYPE_RGMII_ID ||
+	    sc->base.phy_mode == MII_CONTYPE_RGMII_RXID)
+		enable &= ~(1 << 15);
+	SYSCON_WRITE_4(sc->grf, RK3528_GMAC_CON5, 0xc0000000 | enable);
+	SYSCON_WRITE_4(sc->grf, RK3528_GMAC_CON6,
+	    0xffff0000 | (rx << 8) | tx);
+}
+
+static void
+rk3528_set_phy_mode(struct if_dwc_rk_softc *sc)
+{
+	/* RGMII, ungated RMII clock, clock source CRU or external IO. */
+	SYSCON_WRITE_4(sc->grf, RK3528_GMAC_CON5,
+	    0x13000000 | (sc->clock_in ? (1 << 12) : 0));
+}
+
+static int
+rk3528_set_speed(struct if_dwc_rk_softc *sc, int speed)
+{
+	uint32_t div;
+
+	switch (speed) {
+	case IFM_1000_T:
+		div = 0; /* 125 MHz / 1 */
+		break;
+	case IFM_100_TX:
+		div = 3; /* 125 MHz / 5 */
+		break;
+	case IFM_10_T:
+		div = 2; /* 125 MHz / 50 */
+		break;
+	default:
+		return (EINVAL);
+	}
+	SYSCON_WRITE_4(sc->grf, RK3528_GMAC_CON5,
+	    0x0c000000 | (div << 10));
+	return (0);
+}
+
+static struct if_dwc_rk_ops rk3528_ops = {
+	.flags = DWC_HAS_GMAC4,
+	.set_delays = rk3528_set_delays,
+	.set_speed = rk3528_set_speed,
+	.set_phy_mode = rk3528_set_phy_mode,
+};
+
 static struct ofw_compat_data compat_data[] = {
+	{"rockchip,rk3528-gmac", (uintptr_t)&rk3528_ops},
 	{"rockchip,rk3288-gmac", (uintptr_t)&rk3288_ops},
 	{"rockchip,rk3328-gmac", (uintptr_t)&rk3328_ops},
 	{"rockchip,rk3399-gmac", (uintptr_t)&rk3399_ops},
@@ -501,6 +564,11 @@ if_dwc_rk_init(device_t dev)
 		return (ENXIO);
 	}
 
+	sc->base.flags |= sc->ops->flags;
+	if (sc->ops == &rk3528_ops &&
+	    (sc->grf == NULL || !mii_contype_is_rgmii(sc->base.phy_mode)))
+		return (ENXIO);
+
 	if (OF_getencprop(node, "tx_delay", &tx, sizeof(tx)) <= 0)
 		tx = 0x30;
 	if (OF_getencprop(node, "rx_delay", &rx, sizeof(rx)) <= 0)
@@ -523,6 +591,9 @@ if_dwc_rk_init(device_t dev)
 
 	if (sc->phy_node)
 		sc->integrated_phy = OF_hasprop(sc->phy_node, "phy-is-integrated");
+
+	if (sc->ops == &rk3528_ops && sc->integrated_phy)
+		return (ENXIO);
 
 	if (sc->integrated_phy)
 		device_printf(sc->base.dev, "PHY is integrated\n");
@@ -585,7 +656,8 @@ if_dwc_rk_mii_clk(device_t dev)
 	int rv;
 
 	sc = device_get_softc(dev);
-	if ((rv = clk_get_freq(sc->pclk_mac, &freq)) != 0)
+	if ((rv = clk_get_freq(sc->ops == &rk3528_ops ?
+	    sc->base.clk_stmmaceth : sc->pclk_mac, &freq)) != 0)
 		return (-rv);
 	freq = freq / 1000 / 1000;
 
