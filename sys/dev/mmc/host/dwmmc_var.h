@@ -65,6 +65,8 @@ struct dwmmc_softc {
 	uint32_t		hwtype;
 	uint32_t		use_auto_stop;
 	uint32_t		use_pio;
+	bool			desc_map_loaded;
+	int			dma_map_error;
 	bool			pio_read_batch;
 	uint64_t		pio_read_status, pio_read_words;
 	uint64_t		pio_read_bulk, pio_read_fallbacks;

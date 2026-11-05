@@ -171,13 +171,39 @@ static struct resource_spec dwmmc_spec[] = {
 static void
 dwmmc_get1paddr(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 {
+	struct dwmmc_softc *sc = arg;
 
-	if (nsegs != 1)
-		panic("%s: nsegs != 1 (%d)\n", __func__, nsegs);
+	sc->dma_map_error = error;
 	if (error != 0)
-		panic("%s: error != 0 (%d)\n", __func__, error);
+		return;
+	sc->desc_map_loaded = true;
+	if (nsegs != 1) {
+		sc->dma_map_error = EINVAL;
+		return;
+	}
+	sc->desc_ring_paddr = segs[0].ds_addr;
+}
 
-	*(bus_addr_t *)arg = segs[0].ds_addr;
+/* Release partially constructed resources before DMA has started. */
+static void
+dma_release(struct dwmmc_softc *sc)
+{
+	if (sc->buf_map != NULL)
+		bus_dmamap_destroy(sc->buf_tag, sc->buf_map);
+	if (sc->buf_tag != NULL)
+		bus_dma_tag_destroy(sc->buf_tag);
+	if (sc->desc_map_loaded)
+		bus_dmamap_unload(sc->desc_tag, sc->desc_map);
+	if (sc->desc_ring != NULL)
+		bus_dmamem_free(sc->desc_tag, sc->desc_ring, sc->desc_map);
+	if (sc->desc_tag != NULL)
+		bus_dma_tag_destroy(sc->desc_tag);
+	sc->buf_map = NULL;
+	sc->buf_tag = NULL;
+	sc->desc_map = NULL;
+	sc->desc_ring = NULL;
+	sc->desc_tag = NULL;
+	sc->desc_map_loaded = false;
 }
 
 static void
@@ -254,7 +280,7 @@ dma_setup(struct dwmmc_softc *sc)
 	if (error != 0) {
 		device_printf(sc->dev,
 		    "could not create ring DMA tag.\n");
-		return (1);
+		goto fail;
 	}
 
 	error = bus_dmamem_alloc(sc->desc_tag, (void**)&sc->desc_ring,
@@ -263,16 +289,19 @@ dma_setup(struct dwmmc_softc *sc)
 	if (error != 0) {
 		device_printf(sc->dev,
 		    "could not allocate descriptor ring.\n");
-		return (1);
+		goto fail;
 	}
 
+	sc->dma_map_error = 0;
 	error = bus_dmamap_load(sc->desc_tag, sc->desc_map,
 	    sc->desc_ring, IDMAC_DESC_SIZE, dwmmc_get1paddr,
-	    &sc->desc_ring_paddr, 0);
+	    sc, BUS_DMA_NOWAIT);
+	if (error == 0)
+		error = sc->dma_map_error;
 	if (error != 0) {
 		device_printf(sc->dev,
 		    "could not load descriptor ring map.\n");
-		return (1);
+		goto fail;
 	}
 
 	for (idx = 0; idx < IDMAC_DESC_SEGS; idx++) {
@@ -300,7 +329,7 @@ dma_setup(struct dwmmc_softc *sc)
 	if (error != 0) {
 		device_printf(sc->dev,
 		    "could not create ring DMA tag.\n");
-		return (1);
+		goto fail;
 	}
 
 	error = bus_dmamap_create(sc->buf_tag, 0,
@@ -308,10 +337,14 @@ dma_setup(struct dwmmc_softc *sc)
 	if (error != 0) {
 		device_printf(sc->dev,
 		    "could not create TX buffer DMA map.\n");
-		return (1);
+		goto fail;
 	}
 
 	return (0);
+
+fail:
+	dma_release(sc);
+	return (error);
 }
 
 static void
