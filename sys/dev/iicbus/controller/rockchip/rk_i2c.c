@@ -1,6 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * Copyright (c) 2018 Emmanuel Vadot <manu@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -143,6 +144,7 @@ static struct ofw_compat_data compat_data[] = {
 	{"rockchip,rk3288-i2c", 1},
 	{"rockchip,rk3328-i2c", 1},
 	{"rockchip,rk3399-i2c", 1},
+	{"rockchip,rk3528-i2c", 1},
 	{NULL,             0}
 };
 
