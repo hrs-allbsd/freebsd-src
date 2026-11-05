@@ -1013,6 +1013,10 @@ dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 {
 	struct mmc_data *data;
 
+	/* Data errors and IDMAC completion may be reported together. */
+	if (!sc->dma_map_loaded)
+		return (0);
+
 	data = cmd->data;
 
 	if (data->flags & MMC_DATA_WRITE)
