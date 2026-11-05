@@ -102,7 +102,7 @@ scmi_clk_set_rate(struct scmi_clk_softc *sc, int clk_id, uint64_t rate)
 	return (error);
 }
 
-static int __unused
+static int
 scmi_clk_gate(struct scmi_clk_softc *sc, int clk_id, int enable)
 {
 	struct scmi_clk_state_in *in;
@@ -166,11 +166,23 @@ scmi_clknode_set_freq(struct clknode *clk, uint64_t fin, uint64_t *fout,
 	return (0);
 }
 
+static int
+scmi_clknode_set_gate(struct clknode *clk, bool enable)
+{
+	struct scmi_clknode_softc *clk_sc;
+	struct scmi_clk_softc *sc;
+
+	clk_sc = clknode_get_softc(clk);
+	sc = device_get_softc(clk_sc->dev);
+	return (scmi_clk_gate(sc, clk_sc->clock_id, enable));
+}
+
 static clknode_method_t scmi_clknode_methods[] = {
 	/* Device interface */
 	CLKNODEMETHOD(clknode_init,		scmi_clknode_init),
 	CLKNODEMETHOD(clknode_recalc_freq,	scmi_clknode_recalc_freq),
 	CLKNODEMETHOD(clknode_set_freq,		scmi_clknode_set_freq),
+	CLKNODEMETHOD(clknode_set_gate,		scmi_clknode_set_gate),
 	CLKNODEMETHOD_END
 };
 
