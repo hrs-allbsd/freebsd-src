@@ -29,8 +29,11 @@
 #include <sys/kernel.h>
 #include <sys/bus.h>
 #include <sys/module.h>
+#include <sys/lock.h>
+#include <sys/mutex.h>
 #include <sys/queue.h>
 #include <sys/taskqueue.h>
+#include <sys/sysctl.h>
 
 #include <machine/bus.h>
 
@@ -42,6 +45,8 @@
 #include <dev/clk/clk.h>
 
 #include <dev/mmc/host/dwmmc_var.h>
+#include <dev/mmc/host/dwmmc_reg.h>
+#include <dev/mmc/host/dwmmc_clock.h>
 
 #include "opt_mmccam.h"
 
@@ -59,6 +64,40 @@ static struct ofw_compat_data compat_data[] = {
 };
 
 static int dwmmc_rockchip_update_ios(struct dwmmc_softc *sc, struct mmc_ios *ios);
+
+static int
+rk3528_sd_clock_snapshot(SYSCTL_HANDLER_ARGS)
+{
+	struct dwmmc_softc *sc = arg1;
+	uint64_t ciu;
+	uint32_t div, src, ena, width, uhs, requested;
+	char text[384];
+	int error;
+
+	if (sc->ciu == NULL)
+		return (ENOENT);
+	error = clk_get_freq(sc->ciu, &ciu);
+	if (error != 0)
+		return (error);
+	mtx_lock(&sc->sc_mtx);
+	div = bus_read_4(sc->res[0], SDMMC_CLKDIV);
+	src = bus_read_4(sc->res[0], SDMMC_CLKSRC);
+	ena = bus_read_4(sc->res[0], SDMMC_CLKENA);
+	width = bus_read_4(sc->res[0], SDMMC_CTYPE);
+	uhs = bus_read_4(sc->res[0], SDMMC_UHS_REG);
+	requested = sc->host.ios.clock;
+	mtx_unlock(&sc->sc_mtx);
+	/*
+	 * RK3528 CLKGEN divides CIU by two before the DW-MSHC divider.
+	 * This is a best-effort snapshot, not a measurement at the pins.
+	 */
+	snprintf(text, sizeof(text), "requested_hz=%u ciu_hz=%ju "
+	    "input_hz=%ju clkdiv=%#x clksrc=%#x clkena=%#x ctype=%#x "
+	    "uhs=%#x estimated_card_hz=%ju best_effort=1 pin_measured=0",
+	    requested, (uintmax_t)ciu, (uintmax_t)(ciu / 2), div, src, ena,
+	    width, uhs, (uintmax_t)dwmmc_card_clock(ciu / 2, div, src, ena));
+	return (sysctl_handle_string(oidp, text, 0, req));
+}
 
 static int
 rockchip_dwmmc_probe(device_t dev)
@@ -96,6 +135,11 @@ rockchip_dwmmc_attach(device_t dev)
 
 	sc->update_ios = &dwmmc_rockchip_update_ios;
 	rc = dwmmc_attach(dev);
+	if (rc == 0 && type == RK3528)
+		SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+		    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+		    "clock_snapshot", CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
+		    sc, 0, rk3528_sd_clock_snapshot, "A", "SD clock configuration");
 
 	/*
 	 * Note: It's not that the controller doesn't support HS200,
