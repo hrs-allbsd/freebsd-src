@@ -1,6 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * Copyright (c) 2018 Emmanuel Vadot <manu@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -96,6 +97,8 @@ struct rk_pinctrl_conf {
 	struct rk_pinctrl_gpio		*gpio_bank;
 	uint32_t			ngpio_bank;
 	uint32_t	(*get_pd_offset)(struct rk_pinctrl_softc *, uint32_t);
+	uint32_t	(*get_drive_offset)(uint32_t);
+	uint32_t	(*get_schmitt_offset)(uint32_t);
 	struct syscon	*(*get_syscon)(struct rk_pinctrl_softc *, uint32_t);
 	int		(*parse_bias)(phandle_t, int);
 	int		(*resolv_bias_value)(int, int);
@@ -1000,11 +1003,86 @@ struct rk_pinctrl_conf rk3568_conf = {
 	.get_bias_value = rk3568_get_bias_value,
 };
 
+/* RK3528 IOC is a single syscon with non-contiguous bank regions. */
+static struct rk_pinctrl_gpio rk3528_gpio_bank[] = {
+	RK_GPIO(0, "gpio0"), RK_GPIO(1, "gpio1"), RK_GPIO(2, "gpio2"),
+	RK_GPIO(3, "gpio3"), RK_GPIO(4, "gpio4"),
+};
+
+static struct rk_pinctrl_bank rk3528_iomux_bank[] = {
+	RK_IOMUX(0, 0, 0x00000, 4),
+	RK_IOMUX(0, 1, 0x00008, 4),
+	RK_IOMUX(0, 2, 0x00010, 4),
+	RK_IOMUX(0, 3, 0x00018, 4),
+	RK_IOMUX(1, 0, 0x20020, 4),
+	RK_IOMUX(1, 1, 0x20028, 4),
+	RK_IOMUX(1, 2, 0x20030, 4),
+	RK_IOMUX(1, 3, 0x20038, 4),
+	RK_IOMUX(2, 0, 0x30040, 4),
+	RK_IOMUX(2, 1, 0x30048, 4),
+	RK_IOMUX(2, 2, 0x30050, 4),
+	RK_IOMUX(2, 3, 0x30058, 4),
+	RK_IOMUX(3, 0, 0x20060, 4),
+	RK_IOMUX(3, 1, 0x20068, 4),
+	RK_IOMUX(3, 2, 0x20070, 4),
+	RK_IOMUX(3, 3, 0x20078, 4),
+	RK_IOMUX(4, 0, 0x10080, 4),
+	RK_IOMUX(4, 1, 0x10088, 4),
+	RK_IOMUX(4, 2, 0x10090, 4),
+	RK_IOMUX(4, 3, 0x10098, 4),
+};
+
+static uint32_t
+rk3528_get_pd_offset(struct rk_pinctrl_softc *sc, uint32_t bank)
+{
+	static const uint32_t offsets[] = {
+		0x200, 0x20210, 0x30220, 0x20230, 0x10240
+	};
+
+	/* The common pull helpers add bank * 0x10 to this base. */
+	return (offsets[bank] - bank * 0x10);
+}
+
+static uint32_t
+rk3528_get_drive_offset(uint32_t bank)
+{
+	static const uint32_t offsets[] = {
+		0x100, 0x20120, 0x30160, 0x20190, 0x101c0
+	};
+
+	return (offsets[bank]);
+}
+
+static uint32_t
+rk3528_get_schmitt_offset(uint32_t bank)
+{
+	static const uint32_t offsets[] = {
+		0x400, 0x20410, 0x30420, 0x20430, 0x10440
+	};
+
+	return (offsets[bank]);
+}
+
+static struct rk_pinctrl_conf rk3528_conf = {
+	.iomux_conf = rk3528_iomux_bank,
+	.iomux_nbanks = nitems(rk3528_iomux_bank),
+	.gpio_bank = rk3528_gpio_bank,
+	.ngpio_bank = nitems(rk3528_gpio_bank),
+	.get_pd_offset = rk3528_get_pd_offset,
+	.get_drive_offset = rk3528_get_drive_offset,
+	.get_schmitt_offset = rk3528_get_schmitt_offset,
+	.get_syscon = rk3328_get_syscon,
+	.parse_bias = rk3568_parse_bias,
+	.resolv_bias_value = rk3568_resolv_bias_value,
+	.get_bias_value = rk3568_get_bias_value,
+};
+
 static struct ofw_compat_data compat_data[] = {
 	{"rockchip,rk3288-pinctrl", (uintptr_t)&rk3288_conf},
 	{"rockchip,rk3328-pinctrl", (uintptr_t)&rk3328_conf},
 	{"rockchip,rk3399-pinctrl", (uintptr_t)&rk3399_conf},
 	{"rockchip,rk3568-pinctrl", (uintptr_t)&rk3568_conf},
+	{"rockchip,rk3528-pinctrl", (uintptr_t)&rk3528_conf},
 	{NULL,             0}
 };
 
@@ -1180,11 +1258,15 @@ rk_pinctrl_configure_pin(struct rk_pinctrl_softc *sc, uint32_t *pindata)
 
 	/* Then drive strength */
 	if (ofw_bus_node_is_compatible(ofw_bus_get_node(sc->dev),
-	    "rockchip,rk3568-pinctrl")) {
+	    "rockchip,rk3568-pinctrl") ||
+	    sc->conf->get_drive_offset != NULL) {
 		uint32_t value;
 		if (OF_getencprop(pin_conf, "drive-strength", &value,
 		    sizeof(value)) == sizeof(value)) {
-			if (bank)
+			if (sc->conf->get_drive_offset != NULL)
+				reg = sc->conf->get_drive_offset(bank) +
+				    (pin / 2 * 4);
+			else if (bank)
 				reg = 0x01c0 + (bank * 0x40) + (pin / 2 * 4);
 			else
 				reg = 0x0070 + (pin / 2 * 4);
@@ -1208,6 +1290,16 @@ rk_pinctrl_configure_pin(struct rk_pinctrl_softc *sc, uint32_t *pindata)
 			SYSCON_MODIFY_4(syscon, reg, mask,
 			    drive << bit | (mask << 16));
 		}
+	}
+
+	/* RK3528 has one Schmitt-enable bit per pin, eight pins per word. */
+	if (sc->conf->get_schmitt_offset != NULL &&
+	    (OF_hasprop(pin_conf, "input-schmitt-enable") ||
+	    OF_hasprop(pin_conf, "input-schmitt-disable"))) {
+		reg = sc->conf->get_schmitt_offset(bank) + (pin / 8) * 4;
+		mask = 1U << (pin % 8);
+		SYSCON_WRITE_4(syscon, reg, (mask << 16) |
+		    (OF_hasprop(pin_conf, "input-schmitt-enable") ? mask : 0));
 	}
 
 	/* Finally set the pin function */
@@ -1354,7 +1446,7 @@ rk_pinctrl_get_bank(struct rk_pinctrl_softc *sc, device_t gpio, int *bank)
 	if (i == sc->conf->ngpio_bank)
 		return (EINVAL);
 
-	*bank = i;
+	*bank = sc->conf->gpio_bank[i].bank;
 	return (0);
 }
 
@@ -1481,6 +1573,7 @@ rk_pinctrl_attach(device_t dev)
 	phandle_t node;
 	device_t cdev;
 	int rv, gpio_unit;
+	pcell_t gpio_ranges[4];
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
@@ -1522,6 +1615,21 @@ rk_pinctrl_attach(device_t dev)
 	     node = OF_peer(node)) {
 		if (!ofw_bus_node_is_compatible(node, "rockchip,gpio-bank"))
 			continue;
+		/* RK3528 profiles may expose only the GPIO banks they own. */
+		if (sc->conf == &rk3528_conf) {
+			if (OF_getencprop(node, "gpio-ranges", gpio_ranges,
+			    sizeof(gpio_ranges)) != sizeof(gpio_ranges) ||
+			    gpio_ranges[1] != 0 || gpio_ranges[2] % 32 != 0 ||
+			    gpio_ranges[3] != 32) {
+				device_printf(dev, "Invalid GPIO bank range\n");
+				continue;
+			}
+			gpio_unit = gpio_ranges[2] / 32;
+		}
+		if (gpio_unit >= sc->conf->ngpio_bank) {
+			device_printf(dev, "GPIO bank index out of range\n");
+			continue;
+		}
 		cdev = simplebus_add_device(dev, node, 0, NULL, -1, NULL);
 		if (cdev == NULL) {
 			device_printf(dev, " Cannot add GPIO subdevice\n");
