@@ -102,6 +102,7 @@ struct cdce_softc {
 	uint8_t	sc_ifaces_index[2];
 	uint8_t sc_notify_state;
 	uint8_t sc_tx_frames;
+	uint8_t sc_tx_frames_alloc;
 #define	CDCE_NOTIFY_NETWORK_CONNECTION	0
 #define	CDCE_NOTIFY_SPEED_CHANGE	1
 #define	CDCE_NOTIFY_DONE		2

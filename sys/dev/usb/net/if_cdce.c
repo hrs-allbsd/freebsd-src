@@ -128,6 +128,29 @@ SYSCTL_INT(_hw_usb_cdce, OID_AUTO, device_tx_frames, CTLFLAG_RDTUN,
     &cdce_device_tx_frames, 0,
     "Device-mode ECM transmit frames per transfer at attach (1..32)");
 
+static int
+cdce_sysctl_tx_frames(SYSCTL_HANDLER_ARGS)
+{
+	struct cdce_softc *sc = arg1;
+	int error, value;
+
+	CDCE_LOCK(sc);
+	value = sc->sc_tx_frames;
+	CDCE_UNLOCK(sc);
+	error = sysctl_handle_int(oidp, &value, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	CDCE_LOCK(sc);
+	if (value < 1 || value > sc->sc_tx_frames_alloc)
+		error = EINVAL;
+	else
+		/* Active transfers keep their own frame count. This budget is
+		 * read only when the callback prepares the next transfer. */
+		sc->sc_tx_frames = value;
+	CDCE_UNLOCK(sc);
+	return (error);
+}
+
 #ifdef USB_DEBUG
 static int cdce_debug = 0;
 static int cdce_tx_interval = 0;
@@ -803,6 +826,14 @@ alloc_transfers:
 	if (error) {
 		device_printf(dev, "could not attach interface\n");
 		goto detach;
+	}
+	if (uaa->usb_mode == USB_MODE_DEVICE && pcfg == config) {
+		sc->sc_tx_frames_alloc = config[CDCE_BULK_TX].frames;
+		SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+		    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+		    "tx_frames", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+		    sc, 0, cdce_sysctl_tx_frames, "I",
+		    "Device ECM frame budget for subsequent transfers");
 	}
 	return (0);			/* success */
 
