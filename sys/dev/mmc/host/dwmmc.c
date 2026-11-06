@@ -765,6 +765,22 @@ dwmmc_attach(device_t dev)
 	/* Keep controller interrupts masked until card detection is ready. */
 	WRITE4(sc, SDMMC_INTMASK, 0);
 
+	if (!sc->use_pio && OF_hasprop(ofw_bus_get_node(dev),
+	    "freebsd,use-idmac")) {
+		uint32_t hcon;
+
+		hcon = READ4(sc, SDMMC_HCON);
+		/* HCON[17:16]=0: internal DMA; bit 27=0: 32-bit addresses. */
+		if (((hcon >> 16) & 3) != 0 || (hcon & (1U << 27))) {
+			device_printf(dev,
+			    "Unsupported IDMAC hardware configuration %#x\n", hcon);
+			bus_release_resources(dev, dwmmc_spec, sc->res);
+			DWMMC_LOCK_DESTROY(sc);
+			return (ENXIO);
+		}
+		device_printf(dev, "Using 32-bit IDMAC, HCON=%#x\n", hcon);
+	}
+
 	/* Setup interrupt handler. */
 	error = bus_setup_intr(dev, sc->res[1], INTR_TYPE_NET | INTR_MPSAFE,
 	    NULL, dwmmc_intr, sc, &sc->intr_cookie);
