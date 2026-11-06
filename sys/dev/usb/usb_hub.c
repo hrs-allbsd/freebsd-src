@@ -3,6 +3,7 @@
  *
  * Copyright (c) 1998 The NetBSD Foundation, Inc. All rights reserved.
  * Copyright (c) 1998 Lennart Augustsson. All rights reserved.
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * Copyright (c) 2008-2022 Hans Petter Selasky
  *
  * Redistribution and use in source and binary forms, with or without
@@ -124,7 +125,7 @@ static usb_callback_t uhub_intr_callback;
 static usb_callback_t uhub_reset_tt_callback;
 #endif
 
-static void usb_dev_resume_peer(struct usb_device *udev);
+static void usb_dev_resume_peer(struct usb_device *udev, bool peer_resume);
 static void usb_dev_suspend_peer(struct usb_device *udev);
 static uint8_t usb_peer_should_wakeup(struct usb_device *udev);
 
@@ -938,7 +939,7 @@ uhub_suspend_resume_port(struct uhub_softc *sc, uint8_t portno)
 		 * suspend and resume here
 		 */
 		if (is_suspend == 0)
-			usb_dev_resume_peer(child);
+			usb_dev_resume_peer(child, true);
 		else if (child->flags.usb_mode == USB_MODE_DEVICE)
 			usb_dev_suspend_peer(child);
 	}
@@ -2521,7 +2522,7 @@ usb_bus_powerd(struct usb_bus *bus)
 			/* check if we are suspended */
 			if (udev->flags.self_suspended != 0) {
 				USB_BUS_UNLOCK(bus);
-				usb_dev_resume_peer(udev);
+				usb_dev_resume_peer(udev, false);
 				USB_BUS_LOCK(bus);
 			}
 		} else if ((temp >= limit) &&
@@ -2649,7 +2650,7 @@ usbd_set_dev_wakeup(struct usb_device *udev)
  * signalling to get an USB device out of the suspended state.
  *------------------------------------------------------------------------*/
 static void
-usb_dev_resume_peer(struct usb_device *udev)
+usb_dev_resume_peer(struct usb_device *udev, bool peer_resume)
 {
 	struct usb_bus *bus;
 	int err;
@@ -2668,7 +2669,9 @@ usb_dev_resume_peer(struct usb_device *udev)
 
 	DPRINTF("udev=%p\n", udev);
 
-	if ((udev->flags.usb_mode == USB_MODE_DEVICE) &&
+	/* A resume reported by the port is host initiated; remote-wakeup
+	 * permission only gates a device-initiated wakeup request. */
+	if (!peer_resume && (udev->flags.usb_mode == USB_MODE_DEVICE) &&
 	    (udev->flags.remote_wakeup == 0)) {
 		/*
 		 * If the host did not set the remote wakeup feature, we can
@@ -2681,7 +2684,7 @@ usb_dev_resume_peer(struct usb_device *udev)
 	bus = udev->bus;
 
 	/* resume parent hub first */
-	usb_dev_resume_peer(udev->parent_hub);
+	usb_dev_resume_peer(udev->parent_hub, false);
 
 	/* reduce chance of instant resume failure by waiting a little bit */
 	usb_pause_mtx(NULL, USB_MS_TO_TICKS(20));
@@ -2842,7 +2845,7 @@ repeat:
 
 		if (udev->flags.usb_mode == USB_MODE_DEVICE) {
 			/* resume parent HUB first */
-			usb_dev_resume_peer(udev->parent_hub);
+			usb_dev_resume_peer(udev->parent_hub, false);
 
 			/* reduce chance of instant resume failure by waiting a little bit */
 			usb_pause_mtx(NULL, USB_MS_TO_TICKS(20));
