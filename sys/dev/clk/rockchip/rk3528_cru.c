@@ -99,6 +99,52 @@ static struct rk_cru_gate rk3528_net_gates[] = {
 	GATE(PCLK_GPIO4, "pclk_gpio4", "pclk_rkvenc_root", 37, 8),
 };
 
+/* UART0 is opt-in so the established console profiles stay unchanged. */
+PLIST(uart0_parents) = { "clk_uart0_src", "clk_uart0_frac", "xin24m" };
+static struct rk_clk rk3528_uart_clks[] = {
+	CDIV(0, "uart0_src_div", "gpll", 0, 4, 5, 5),
+	FRACT(0, "uart0_frac_div", "clk_uart0_src", 0, 5),
+	MUX(CLK_UART0, "clk_uart0", uart0_parents, 0, 6, 0, 2),
+	MUX(0, "pclk_bus_mux", pclk_parents, 0, 43, 10, 2),
+};
+static struct rk_cru_gate rk3528_uart_gates[] = {
+	GATE(CLK_UART0_SRC, "clk_uart0_src", "uart0_src_div", 0, 12),
+	GATE(CLK_UART0_FRAC, "clk_uart0_frac", "uart0_frac_div", 0, 13),
+	GATE(SCLK_UART0, "sclk_uart0", "clk_uart0", 0, 14),
+	GATE(PCLK_BUS_ROOT, "pclk_bus_root", "pclk_bus_mux", 8, 6),
+	GATE(PCLK_UART0, "pclk_uart0", "pclk_bus_root", 10, 7),
+};
+
+/* Select the board's 24MHz path without changing its running console rate. */
+static int
+rk3528_uart0_console_clock(device_t dev)
+{
+	clk_t mux, oscillator;
+	uint64_t frequency;
+	int error;
+
+	if ((error = clk_get_by_name(dev, "clk_uart0", &mux)) != 0)
+		return (error);
+	if ((error = clk_get_freq(mux, &frequency)) != 0 ||
+	    frequency != 24000000) {
+		device_printf(dev, "UART0 handoff clock is not 24MHz\n");
+		clk_release(mux);
+		return (error != 0 ? error : EINVAL);
+	}
+	error = clk_get_by_name(dev, "xin24m", &oscillator);
+	if (error == 0) {
+		error = clk_set_parent_by_clk(mux, oscillator);
+		clk_release(oscillator);
+	}
+	if (error == 0)
+		error = clk_get_freq(mux, &frequency);
+	clk_release(mux);
+	if (error != 0 || frequency != 24000000)
+		return (error != 0 ? error : EINVAL);
+	device_printf(dev, "UART0 console clock: 24000000 Hz from xin24m\n");
+	return (0);
+}
+
 /* Raw reset indices are private to the FreeBSD prototype compatibles. */
 static bool
 rk3528_reset_valid(struct rk_cru_softc *sc, intptr_t id)
@@ -141,7 +187,8 @@ rk3528_cru_probe(device_t dev)
 {
 	if (!ofw_bus_status_okay(dev) ||
 	    (!ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-cru") &&
-	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-gmac-cru")))
+	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-gmac-cru") &&
+	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-uart-cru")))
 		return (ENXIO);
 	device_set_desc(dev, "Rockchip RK3528 SDMMC0 clocks (initial support)");
 	return (BUS_PROBE_DEFAULT);
@@ -151,29 +198,50 @@ static int
 rk3528_cru_attach(device_t dev)
 {
 	struct rk_cru_softc *sc = device_get_softc(dev);
+	bool uart;
 	size_t clock_bytes, gate_bytes;
+	int error;
+
+	uart = ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-uart-cru");
 
 	sc->clks = rk3528_clks;
 	sc->nclks = nitems(rk3528_clks);
 	sc->gates = rk3528_gates;
 	sc->ngates = nitems(rk3528_gates);
-	if (ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-gmac-cru")) {
+	if (ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-gmac-cru") || uart) {
 		sc->type = 1;
 		sc->nclks += nitems(rk3528_net_clks);
 		clock_bytes = sizeof(rk3528_clks) + sizeof(rk3528_net_clks);
+		if (uart)
+			clock_bytes += sizeof(rk3528_uart_clks);
 		sc->clks = malloc(clock_bytes, M_DEVBUF, M_WAITOK);
 		memcpy(sc->clks, rk3528_clks, sizeof(rk3528_clks));
 		memcpy(sc->clks + nitems(rk3528_clks), rk3528_net_clks,
 		    sizeof(rk3528_net_clks));
 		sc->ngates += nitems(rk3528_net_gates);
 		gate_bytes = sizeof(rk3528_gates) + sizeof(rk3528_net_gates);
+		if (uart)
+			gate_bytes += sizeof(rk3528_uart_gates);
 		sc->gates = malloc(gate_bytes, M_DEVBUF, M_WAITOK);
 		memcpy(sc->gates, rk3528_gates, sizeof(rk3528_gates));
 		memcpy(sc->gates + nitems(rk3528_gates), rk3528_net_gates,
 		    sizeof(rk3528_net_gates));
 		device_set_desc(dev, "Rockchip RK3528 SDMMC0/GMAC1 clocks");
 	}
-	return (rk_cru_attach(dev));
+	if (uart) {
+		memcpy(sc->clks + sc->nclks, rk3528_uart_clks,
+		    sizeof(rk3528_uart_clks));
+		sc->nclks += nitems(rk3528_uart_clks);
+		memcpy(sc->gates + sc->ngates, rk3528_uart_gates,
+		    sizeof(rk3528_uart_gates));
+		sc->ngates += nitems(rk3528_uart_gates);
+		sc->type = 3;
+		device_set_desc(dev, "Rockchip RK3528 SDMMC0/GMAC1/UART0 clocks");
+	}
+	error = rk_cru_attach(dev);
+	if (error == 0 && uart)
+		error = rk3528_uart0_console_clock(dev);
+	return (error);
 }
 
 static device_method_t rk3528_cru_methods[] = {
