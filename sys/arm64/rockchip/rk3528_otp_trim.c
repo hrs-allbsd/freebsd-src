@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  */
-/* Read/cache the two R28S TSADC trim bytes; no OTP programming. */
+/* Read/cache TSADC trim and opt-in public chip ID; no OTP programming. */
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -16,6 +16,8 @@
 
 #include <dev/clk/clk.h>
 #include <dev/ofw/ofw_bus_subr.h>
+
+#include <crypto/sha2/sha256.h>
 
 #include "nvmem_if.h"
 
@@ -31,9 +33,13 @@
 #define CMD0	       0x1000
 #define CMD1	       0x1004
 #define TRIM_OFFSET    0x44
+#define CHIP_ID_OFFSET 0x0a
+#define CHIP_ID_BYTES  16
 
 struct rk3528_otp_trim_softc {
-	uint8_t trim[2];
+	uint8_t trim[2], chip_id[CHIP_ID_BYTES];
+	char serial[38], gmac[18], usb_mac[13], pcie_mac[18];
+	u_int identity_reads, identity_valid;
 	u_int word, hardware_reads, cache_reads;
 };
 /* Ten milliseconds per operation, matching the Board Support Package read timeout. */
@@ -61,14 +67,19 @@ rk3528_otp_trim_read(device_t dev, uint32_t offset, uint32_t size, uint8_t *buf)
 	atomic_add_int(&sc->cache_reads, 1);
 	return (0);
 }
-/* Only the fixed two-byte trim word can be requested. */
+/* Only the public ID range declared in the vendor DT and the two trim
+ * bytes can be requested. No caller supplies an arbitrary OTP address.
+ */
 static int
 rk3528_otp_read_word(struct resource *res, uint32_t offset, uint16_t *word)
 {
 	uint32_t status;
 	int error;
 
-	if (offset != TRIM_OFFSET)
+	if ((offset & 1) != 0 ||
+	    (offset != TRIM_OFFSET &&
+		(offset < CHIP_ID_OFFSET ||
+		    offset >= CHIP_ID_OFFSET + CHIP_ID_BYTES)))
 		return (ERANGE);
 	bus_write_4(res, INT_STATUS, 4);
 	bus_write_4(res, USER_ADDR, 0xffff0000 | (offset / 2));
@@ -80,6 +91,66 @@ rk3528_otp_read_word(struct resource *res, uint32_t offset, uint16_t *word)
 	if ((status & 0xc0) == 0xc0 || (status & 0x20) != 0)
 		return (EIO);
 	*word = bus_read_4(res, USER_Q) & 0xffff;
+	return (0);
+}
+
+/* Stable, locally administered unicast identities, domain-separated by
+ * purpose. This is identity derivation, not key generation or entropy.
+ */
+static int
+rk3528_otp_identity(const uint8_t id[CHIP_ID_BYTES], char serial[38],
+    uint8_t gmac[6], uint8_t usb[6], uint8_t pcie[6])
+{
+	static const char hex[] = "0123456789abcdef";
+	static const char *domains[] = { "nanopi-r28s/gmac1/v1",
+		"nanopi-r28s/usb-ecm/v1", "nanopi-r28s/pcie-re0/v1" };
+	SHA256_CTX ctx;
+	uint8_t digest[SHA256_DIGEST_LENGTH];
+	unsigned zero = 0, ones = 0;
+
+	for (unsigned i = 0; i < CHIP_ID_BYTES; i++) {
+		zero += id[i] == 0;
+		ones += id[i] == 0xff;
+	}
+	if (zero == CHIP_ID_BYTES || ones == CHIP_ID_BYTES)
+		return (EINVAL);
+	memcpy(serial, "R28S-", 5);
+	for (unsigned i = 0; i < CHIP_ID_BYTES; i++) {
+		serial[5 + i * 2] = hex[id[i] >> 4];
+		serial[6 + i * 2] = hex[id[i] & 15];
+	}
+	serial[37] = 0;
+	for (unsigned i = 0; i < nitems(domains); i++) {
+		SHA256_Init(&ctx);
+		SHA256_Update(&ctx, domains[i], strlen(domains[i]) + 1);
+		SHA256_Update(&ctx, id, CHIP_ID_BYTES);
+		SHA256_Final(digest, &ctx);
+		digest[0] = (digest[0] & 0xfc) | 2;
+		memcpy(i == 0 ? gmac : i == 1 ? usb : pcie, digest, 6);
+	}
+	explicit_bzero(digest, sizeof(digest));
+	return (0);
+}
+
+/* Derive diagnostic identities without configuring any consumer. */
+static int
+rk3528_otp_prepare_identity(device_t dev)
+{
+	struct rk3528_otp_trim_softc *sc = device_get_softc(dev);
+	uint8_t gmac[6], usb[6], pcie[6];
+	int error;
+
+	error = rk3528_otp_identity(sc->chip_id, sc->serial, gmac, usb, pcie);
+	if (error != 0)
+		return (error);
+	snprintf(sc->gmac, sizeof(sc->gmac), "%02x:%02x:%02x:%02x:%02x:%02x",
+	    gmac[0], gmac[1], gmac[2], gmac[3], gmac[4], gmac[5]);
+	snprintf(sc->usb_mac, sizeof(sc->usb_mac), "%02X%02X%02X%02X%02X%02X",
+	    usb[0], usb[1], usb[2], usb[3], usb[4], usb[5]);
+	snprintf(sc->pcie_mac, sizeof(sc->pcie_mac),
+	    "%02x:%02x:%02x:%02x:%02x:%02x", pcie[0], pcie[1], pcie[2],
+	    pcie[3], pcie[4], pcie[5]);
+	sc->identity_valid = 1;
 	return (0);
 }
 
@@ -101,9 +172,11 @@ rk3528_otp_trim_attach(device_t dev)
 	clk_t clocks[3] = { };
 	bool enabled[3] = { };
 	uint16_t word;
+	bool identity;
 	uint64_t frequency;
 	int error = ENXIO, rid = 0;
 
+	identity = OF_hasprop(ofw_bus_get_node(dev), "freebsd,board-identity");
 	/* No arbitrary address, size or programming controls. */
 	if (!ofw_bus_node_is_compatible(OF_finddevice("/"),
 		"friendlyelec,nanopi-r28s"))
@@ -155,6 +228,17 @@ rk3528_otp_trim_attach(device_t dev)
 		sc->word = word;
 		sc->hardware_reads = 1;
 	}
+	if (error == 0 && identity) {
+		for (unsigned i = 0; i < CHIP_ID_BYTES; i += 2) {
+			error = rk3528_otp_read_word(res, CHIP_ID_OFFSET + i,
+			    &word);
+			if (error != 0)
+				break;
+			sc->chip_id[i] = word & 0xff;
+			sc->chip_id[i + 1] = word >> 8;
+			sc->identity_reads++;
+		}
+	}
 
 	/* Restore the read-mode/lock controls even after a read timeout/ECC
 	 * error. */
@@ -175,6 +259,38 @@ out:
 		device_printf(dev, "trim read failed: %d\n", error);
 		return (error);
 	}
+	if (identity) {
+		error = rk3528_otp_prepare_identity(dev);
+		if (error != 0) {
+			device_printf(dev,
+			    "board identity preparation failed: %d\n", error);
+			return (error);
+		}
+	}
+	SYSCTL_ADD_UINT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "identity_valid", CTLFLAG_RD, &sc->identity_valid, 0,
+	    "Chip-ID identities derived successfully");
+	SYSCTL_ADD_UINT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "identity_reads", CTLFLAG_RD, &sc->identity_reads, 0,
+	    "Read-only public chip-ID words read at attach");
+	SYSCTL_ADD_STRING(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "serial",
+	    CTLFLAG_RD, sc->serial, sizeof(sc->serial),
+	    "Stable public per-chip USB serial");
+	SYSCTL_ADD_STRING(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "gmac",
+	    CTLFLAG_RD, sc->gmac, sizeof(sc->gmac),
+	    "Derived GMAC1 address; not installed");
+	SYSCTL_ADD_STRING(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "usb_mac",
+	    CTLFLAG_RD, sc->usb_mac, sizeof(sc->usb_mac),
+	    "Derived ECM host MAC; not installed");
+	SYSCTL_ADD_STRING(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "pcie_mac",
+	    CTLFLAG_RD, sc->pcie_mac, sizeof(sc->pcie_mac),
+	    "Derived onboard re0 MAC; not installed");
 
 	OF_device_register_xref(OF_xref_from_node(ofw_bus_get_node(dev)), dev);
 	SYSCTL_ADD_UINT(device_get_sysctl_ctx(dev),
