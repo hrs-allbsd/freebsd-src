@@ -7,6 +7,7 @@
  * Copyright (c) 2003-2005 Craig Boston
  * Copyright (c) 2004 Daniel Hartmeier
  * Copyright (c) 2009 Hans Petter Selasky
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -880,7 +881,8 @@ cdce_bulk_write_callback(struct usb_xfer *xfer, usb_error_t error)
 		DPRINTFN(11, "transfer complete: %u bytes in %u frames\n",
 		    actlen, aframes);
 
-		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
+		/* An ECM transfer contains one Ethernet packet per frame. */
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, aframes);
 
 		/* free all previous TX buffers */
 		cdce_free_queue(sc->sc_tx_buf, CDCE_FRAMES_MAX);
