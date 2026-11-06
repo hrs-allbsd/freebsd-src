@@ -14,6 +14,8 @@
 #include <sys/bus.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
+#include <sys/malloc.h>
+#include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/rman.h>
 #include <machine/bus.h>
@@ -63,24 +65,83 @@ static struct rk_cru_gate rk3528_gates[] = {
 	GATE(HCLK_SDMMC0, "hclk_sdmmc0", "hclk_vo_root", 42, 9),
 };
 
-/* The partial provider does not define a reset map. */
+/* Additional clocks require the larger GMAC bring-up register mapping. */
+PLIST(pclk_parents) = { "clk_100m_src", "clk_50m_src", "xin24m" };
+PLIST(hclk_vpu_parents) = { "clk_200m_src", "clk_100m_src", "clk_50m_src", "xin24m" };
+PLIST(aclk_parents) = { "clk_200m_src", "clk_100m_src", "xin24m" };
+static struct rk_clk_pll_def ppll = {
+	.clkdef = { .id = PLL_PPLL, .name = "ppll",
+	    .parent_names = pll_parent, .parent_cnt = nitems(pll_parent) },
+	.base_offset = 0x20080,
+};
+static struct rk_clk rk3528_net_clks[] = {
+	{ .type = RK3328_CLK_PLL, .clk.pll = &ppll },
+	CDIV(0, "clk_50m_div", "cpll", 0, 0, 2, 5),
+	CDIV(0, "clk_200m_div", "gpll", 0, 1, 5, 5),
+	MUX(0, "pclk_vpu_mux", pclk_parents, 0, 61, 4, 2),
+	MUX(0, "aclk_vpu_l_mux", aclk_parents, 0, 60, 0, 2),
+	CDIV(0, "gmac1_125m_div", "ppll", 0, 60, 10, 5),
+	CDIV(0, "gmac1_25m_div", "ppll", 0, 60, 2, 8),
+	MUX(0, "hclk_vpu_mux", hclk_vpu_parents, 0, 61, 2, 2),
+	MUX(0, "pclk_rkvenc_mux", pclk_parents, 0, 79, 4, 2),
+};
+static struct rk_cru_gate rk3528_net_gates[] = {
+	GATE(CLK_MATRIX_50M_SRC, "clk_50m_src", "clk_50m_div", 0, 1),
+	GATE(CLK_MATRIX_200M_SRC, "clk_200m_src", "clk_200m_div", 0, 4),
+	GATE(PCLK_VPU_ROOT, "pclk_vpu_root", "pclk_vpu_mux", 25, 5),
+	GATE(ACLK_VPU_L_ROOT, "aclk_vpu_l_root", "aclk_vpu_l_mux", 25, 0),
+	GATE(PCLK_MAC_VPU, "pclk_gmac1", "pclk_vpu_root", 28, 6),
+	GATE(ACLK_MAC_VPU, "aclk_gmac1", "aclk_vpu_l_root", 28, 5),
+	GATE(CLK_GMAC1_SRC_VPU, "clk_gmac1_125m", "gmac1_125m_div", 25, 2),
+	GATE(CLK_GMAC1_VPU_25M, "clk_gmac1_25m", "gmac1_25m_div", 25, 1),
+	GATE(HCLK_VPU_ROOT, "hclk_vpu_root", "hclk_vpu_mux", 25, 4),
+	GATE(PCLK_RKVENC_ROOT, "pclk_rkvenc_root", "pclk_rkvenc_mux", 36, 2),
+	GATE(PCLK_GPIO4, "pclk_gpio4", "pclk_rkvenc_root", 37, 8),
+};
+
+/* Raw reset indices are private to the FreeBSD prototype compatibles. */
+static bool
+rk3528_reset_valid(struct rk_cru_softc *sc, intptr_t id)
+{
+	if (sc->type >= 1 && id == 453)
+		return (true);
+	return (false);
+}
+
 static int
 rk3528_cru_reset_assert(device_t dev, intptr_t id, bool reset)
 {
-	return (ENXIO);
+	struct rk_cru_softc *sc = device_get_softc(dev);
+
+	if (!rk3528_reset_valid(sc, id))
+		return (ENXIO);
+	mtx_lock(&sc->mtx);
+	bus_write_4(sc->res, 0xa00 + (id / 16) * 4,
+	    (1u << (16 + id % 16)) | (reset ? (1u << (id % 16)) : 0));
+	mtx_unlock(&sc->mtx);
+	return (0);
 }
 
 static int
 rk3528_cru_reset_is_asserted(device_t dev, intptr_t id, bool *reset)
 {
-	return (ENXIO);
+	struct rk_cru_softc *sc = device_get_softc(dev);
+
+	if (!rk3528_reset_valid(sc, id))
+		return (ENXIO);
+	mtx_lock(&sc->mtx);
+	*reset = (bus_read_4(sc->res, 0xa00 + (id / 16) * 4) &
+	    (1u << (id % 16))) != 0;
+	mtx_unlock(&sc->mtx);
+	return (0);
 }
 
 static int
 rk3528_cru_probe(device_t dev)
 {
 	if (!ofw_bus_status_okay(dev) ||
-	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-cru"))
+	    (!ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-cru") &&
+	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-gmac-cru")))
 		return (ENXIO);
 	device_set_desc(dev, "Rockchip RK3528 SDMMC0 clocks (initial support)");
 	return (BUS_PROBE_DEFAULT);
@@ -90,11 +151,28 @@ static int
 rk3528_cru_attach(device_t dev)
 {
 	struct rk_cru_softc *sc = device_get_softc(dev);
+	size_t clock_bytes, gate_bytes;
 
 	sc->clks = rk3528_clks;
 	sc->nclks = nitems(rk3528_clks);
 	sc->gates = rk3528_gates;
 	sc->ngates = nitems(rk3528_gates);
+	if (ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-gmac-cru")) {
+		sc->type = 1;
+		sc->nclks += nitems(rk3528_net_clks);
+		clock_bytes = sizeof(rk3528_clks) + sizeof(rk3528_net_clks);
+		sc->clks = malloc(clock_bytes, M_DEVBUF, M_WAITOK);
+		memcpy(sc->clks, rk3528_clks, sizeof(rk3528_clks));
+		memcpy(sc->clks + nitems(rk3528_clks), rk3528_net_clks,
+		    sizeof(rk3528_net_clks));
+		sc->ngates += nitems(rk3528_net_gates);
+		gate_bytes = sizeof(rk3528_gates) + sizeof(rk3528_net_gates);
+		sc->gates = malloc(gate_bytes, M_DEVBUF, M_WAITOK);
+		memcpy(sc->gates, rk3528_gates, sizeof(rk3528_gates));
+		memcpy(sc->gates + nitems(rk3528_gates), rk3528_net_gates,
+		    sizeof(rk3528_net_gates));
+		device_set_desc(dev, "Rockchip RK3528 SDMMC0/GMAC1 clocks");
+	}
 	return (rk_cru_attach(dev));
 }
 
