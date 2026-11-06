@@ -878,3 +878,5 @@ dev/clk/xilinx/zynqmp_reset.c			optional fdt soc_xilinx_zynq
 arm64/rockchip/rk3528_usb2phy.c	optional rk3528_usb2phy fdt
 
 arm64/rockchip/rk3528_wdt.c	optional rk3528_wdt fdt
+
+arm64/rockchip/rk3528_otp_trim.c	optional rk3528_otp_trim nvmem fdt
