@@ -79,6 +79,8 @@ struct dwmmc_softc {
 	uint64_t		dma_started, dma_completed, dma_failed;
 	uint64_t		dma_read_bytes, dma_write_bytes, dma_map_failures;
 	uint64_t		dma_timeouts;
+	uint64_t		dma_fatal_errors, dma_quiesce_failures;
+	uint64_t		dma_busy_timeouts, dma_ownership_errors;
 	device_t		child;
 	struct task		card_task;	/* Card presence check task */
 	struct timeout_task	card_delayed_task;/* Card insert delayed task */

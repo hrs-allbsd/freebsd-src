@@ -516,8 +516,11 @@ dwmmc_intr(void *arg)
 			dprintf("dma intr 0x%08x\n", reg);
 			WRITE4(sc, SDMMC_IDSTS, reg & SDMMC_IDINTEN_MASK);
 			if (reg & (SDMMC_IDINTEN_FBE | SDMMC_IDINTEN_DU |
-			    SDMMC_IDINTEN_CES | SDMMC_IDINTEN_AI))
+			    SDMMC_IDINTEN_CES | SDMMC_IDINTEN_AI)) {
 				cmd->error = MMC_ERR_FAILED;
+				if (sc->idmac_guard)
+					sc->dma_fatal_errors++;
+			}
 			if (reg & (SDMMC_IDINTEN_TI | SDMMC_IDINTEN_RI))
 				sc->dma_seen_done = true;
 		}
@@ -859,6 +862,10 @@ dwmmc_attach(device_t dev)
 	DWMMC_DMA_COUNTER(dma_write_bytes);
 	DWMMC_DMA_COUNTER(dma_map_failures);
 	DWMMC_DMA_COUNTER(dma_timeouts);
+	DWMMC_DMA_COUNTER(dma_fatal_errors);
+	DWMMC_DMA_COUNTER(dma_quiesce_failures);
+	DWMMC_DMA_COUNTER(dma_busy_timeouts);
+	DWMMC_DMA_COUNTER(dma_ownership_errors);
 #undef DWMMC_DMA_COUNTER
 	SYSCTL_ADD_BOOL(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
@@ -1112,6 +1119,9 @@ dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 			if (sc->idmac_guard) {
 				cmd->error = MMC_ERR_FAILED;
 				sc->dma_fault = true;
+				sc->dma_quiesce_failures++;
+				device_printf(sc->dev,
+				    "IDMAC reset failed; retaining active DMA mapping\n");
 			}
 			return (EIO);
 		}
@@ -1123,9 +1133,10 @@ dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 		for (idx = 0; idx < sc->dma_segments; idx++) {
 			if (sc->desc_ring[idx].des0 & (DES0_OWN | DES0_CES)) {
 				cmd->error = MMC_ERR_FAILED;
-				if (sc->idmac_guard)
+				if (sc->idmac_guard) {
 					sc->dma_fault = true;
-				else if (dma_stop(sc) != 0)
+					sc->dma_ownership_errors++;
+				} else if (dma_stop(sc) != 0)
 					return (EIO);
 				break;
 			}
@@ -1490,6 +1501,7 @@ dwmmc_next_operation(struct dwmmc_softc *sc)
 			DELAY(10);
 		}
 		if (i == 100000) {
+			sc->dma_busy_timeouts++;
 			sc->dma_fault = true;
 			cmd->error = MMC_ERR_TIMEOUT;
 		}
