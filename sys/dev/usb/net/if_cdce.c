@@ -117,12 +117,17 @@ static void cdce_media_status_cb(if_t, struct ifmediareq *);
 static uint32_t	cdce_m_crc32(struct mbuf *, uint32_t, uint32_t);
 static void	cdce_set_filter(struct usb_ether *);
 
+static int cdce_device_tx_queue_len;
+static SYSCTL_NODE(_hw_usb, OID_AUTO, cdce, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "USB CDC-Ethernet");
+SYSCTL_INT(_hw_usb_cdce, OID_AUTO, device_tx_queue_len, CTLFLAG_RDTUN,
+    &cdce_device_tx_queue_len, 0,
+    "Device-mode send queue packets at attach (1..1024, 0 uses ifqmaxlen)");
+
 #ifdef USB_DEBUG
 static int cdce_debug = 0;
 static int cdce_tx_interval = 0;
 
-static SYSCTL_NODE(_hw_usb, OID_AUTO, cdce, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
-    "USB CDC-Ethernet");
 SYSCTL_INT(_hw_usb_cdce, OID_AUTO, debug, CTLFLAG_RWTUN, &cdce_debug, 0,
     "Debug level");
 SYSCTL_INT(_hw_usb_cdce, OID_AUTO, interval, CTLFLAG_RWTUN, &cdce_tx_interval, 0,
@@ -572,13 +577,24 @@ cdce_attach_post_sub(struct usb_ether *ue)
 {
 	struct cdce_softc *sc = uether_getsc(ue);
 	if_t ifp = uether_getifp(ue);
+	int queue_len = ifqmaxlen;
 
 	/* mostly copied from usb_ethernet.c */
 	if_setflags(ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST);
 	if_setstartfn(ifp, uether_start);
 	if_setioctlfn(ifp, cdce_ioctl);
 	if_setinitfn(ifp, uether_init);
-	if_setsendqlen(ifp, ifqmaxlen);
+	/* Keep host mode and the default device-mode queue unchanged. */
+	if (usbd_get_mode(ue->ue_udev) == USB_MODE_DEVICE &&
+	    cdce_device_tx_queue_len != 0) {
+		if (cdce_device_tx_queue_len > 0 &&
+		    cdce_device_tx_queue_len <= 1024)
+			queue_len = cdce_device_tx_queue_len;
+		else
+			device_printf(ue->ue_dev,
+			    "invalid device_tx_queue_len; using ifqmaxlen\n");
+	}
+	if_setsendqlen(ifp, queue_len);
 	if_setsendqready(ifp);
 
 	if ((sc->sc_flags & CDCE_FLAG_VLAN) == CDCE_FLAG_VLAN)
