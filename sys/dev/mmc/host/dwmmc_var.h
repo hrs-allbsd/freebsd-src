@@ -31,6 +31,7 @@
 #ifndef DEV_MMC_HOST_DWMMC_VAR_H
 #define DEV_MMC_HOST_DWMMC_VAR_H
 
+#include <sys/callout.h>
 #include <dev/clk/clk.h>
 #include <dev/hwreset/hwreset.h>
 #include <dev/regulator/regulator.h>
@@ -69,6 +70,7 @@ struct dwmmc_softc {
 	bool			dma_map_loaded;
 	bool			dma_seen_done;
 	bool			idmac_guard, dma_fault;
+	struct callout		dma_deadline;
 	int			dma_segments;
 	int			dma_map_error;
 	bool			pio_read_batch;
@@ -76,6 +78,7 @@ struct dwmmc_softc {
 	uint64_t		pio_read_bulk, pio_read_fallbacks;
 	uint64_t		dma_started, dma_completed, dma_failed;
 	uint64_t		dma_read_bytes, dma_write_bytes, dma_map_failures;
+	uint64_t		dma_timeouts;
 	device_t		child;
 	struct task		card_task;	/* Card presence check task */
 	struct timeout_task	card_delayed_task;/* Card insert delayed task */

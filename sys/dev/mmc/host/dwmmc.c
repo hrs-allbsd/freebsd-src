@@ -156,6 +156,7 @@ static void dwmmc_next_operation(struct dwmmc_softc *);
 static int dwmmc_setup_bus(struct dwmmc_softc *, int);
 static int dma_done(struct dwmmc_softc *, struct mmc_command *);
 static int dma_stop(struct dwmmc_softc *);
+static void dwmmc_dma_timeout(void *);
 static void pio_read(struct dwmmc_softc *, struct mmc_command *);
 static void pio_write(struct dwmmc_softc *, struct mmc_command *);
 static void dwmmc_handle_card_present(struct dwmmc_softc *sc, bool is_present);
@@ -758,6 +759,7 @@ dwmmc_attach(device_t dev)
 	DWMMC_LOCK_INIT(sc);
 	sc->idmac_guard = !sc->use_pio &&
 	    OF_hasprop(ofw_bus_get_node(dev), "freebsd,idmac-guard");
+	callout_init_mtx(&sc->dma_deadline, &sc->sc_mtx, 0);
 
 	if (bus_alloc_resources(dev, dwmmc_spec, sc->res)) {
 		device_printf(dev, "could not allocate resources\n");
@@ -855,6 +857,7 @@ dwmmc_attach(device_t dev)
 	DWMMC_DMA_COUNTER(dma_read_bytes);
 	DWMMC_DMA_COUNTER(dma_write_bytes);
 	DWMMC_DMA_COUNTER(dma_map_failures);
+	DWMMC_DMA_COUNTER(dma_timeouts);
 #undef DWMMC_DMA_COUNTER
 	SYSCTL_ADD_BOOL(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
@@ -904,6 +907,12 @@ dwmmc_detach(device_t dev)
 
 	sc = device_get_softc(dev);
 
+	DWMMC_LOCK(sc);
+	if (sc->idmac_guard && sc->dma_map_loaded) {
+		DWMMC_UNLOCK(sc);
+		return (EBUSY);
+	}
+	DWMMC_UNLOCK(sc);
 	ret = bus_generic_detach(dev);
 	if (ret != 0)
 		return (ret);
@@ -924,6 +933,7 @@ dwmmc_detach(device_t dev)
 
 	taskqueue_drain(taskqueue_bus, &sc->card_task);
 	taskqueue_drain_timeout(taskqueue_bus, &sc->card_delayed_task);
+	callout_drain(&sc->dma_deadline);
 
 	bus_release_resources(dev, dwmmc_spec, sc->res);
 
@@ -1059,6 +1069,20 @@ dwmmc_update_ios(device_t brdev, device_t reqdev)
 	return (ret);
 }
 
+/* The callout runs with sc_mtx held. */
+static void
+dwmmc_dma_timeout(void *arg)
+{
+	struct dwmmc_softc *sc = arg;
+
+	DWMMC_ASSERT_LOCKED(sc);
+	if (!sc->dma_map_loaded || sc->curcmd == NULL)
+		return;
+	sc->dma_timeouts++;
+	sc->curcmd->error = MMC_ERR_TIMEOUT;
+	dwmmc_tasklet(sc);
+}
+
 static int
 dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 {
@@ -1068,6 +1092,9 @@ dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 	/* Data errors and IDMAC completion may be reported together. */
 	if (!sc->dma_map_loaded)
 		return (0);
+
+	if (sc->idmac_guard)
+		callout_stop(&sc->dma_deadline);
 
 	/* A guarded fault must prevent further requests on this card. */
 	if (sc->idmac_guard && cmd->error != MMC_ERR_NONE)
@@ -1405,6 +1432,8 @@ dwmmc_start_cmd(struct dwmmc_softc *sc, struct mmc_command *cmd)
 
 	dprintf("cmdr 0x%08x\n", cmdr);
 
+	if (sc->idmac_guard && sc->dma_map_loaded)
+		callout_reset(&sc->dma_deadline, 10 * hz, dwmmc_dma_timeout, sc);
 	WRITE4(sc, SDMMC_CMDARG, cmd->arg);
 	wmb();
 	WRITE4(sc, SDMMC_CMD, cmdr | SDMMC_CMD_START);
