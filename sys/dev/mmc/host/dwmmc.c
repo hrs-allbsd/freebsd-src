@@ -839,6 +839,21 @@ dwmmc_attach(device_t dev)
 	DWMMC_PIO_COUNTER(pio_read_bulk);
 	DWMMC_PIO_COUNTER(pio_read_fallbacks);
 #undef DWMMC_PIO_COUNTER
+	SYSCTL_ADD_STRING(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "transfer_mode", CTLFLAG_RD, sc->use_pio ? "pio" : "idmac32", 0,
+	    "Data transfer mode");
+#define DWMMC_DMA_COUNTER(name) \
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev), \
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, \
+	    #name, CTLFLAG_RD, &sc->name, 0, "IDMAC " #name)
+	DWMMC_DMA_COUNTER(dma_started);
+	DWMMC_DMA_COUNTER(dma_completed);
+	DWMMC_DMA_COUNTER(dma_failed);
+	DWMMC_DMA_COUNTER(dma_read_bytes);
+	DWMMC_DMA_COUNTER(dma_write_bytes);
+	DWMMC_DMA_COUNTER(dma_map_failures);
+#undef DWMMC_DMA_COUNTER
 
 	TASK_INIT(&sc->card_task, 0, dwmmc_card_task, sc);
 	TIMEOUT_TASK_INIT(taskqueue_bus, &sc->card_delayed_task, 0,
@@ -1061,6 +1076,10 @@ dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 		}
 	}
 
+	if (cmd->error == MMC_ERR_NONE)
+		sc->dma_completed++;
+	else
+		sc->dma_failed++;
 	data = cmd->data;
 
 	if (data->flags & MMC_DATA_WRITE)
@@ -1125,8 +1144,15 @@ dma_prepare(struct dwmmc_softc *sc, struct mmc_command *cmd)
 			bus_dmamap_unload(sc->buf_tag, sc->buf_map);
 			sc->dma_map_loaded = false;
 		}
+		sc->dma_map_failures++;
 		return (err != 0 ? err : sc->dma_map_error);
 	}
+
+	sc->dma_started++;
+	if (data->flags & MMC_DATA_WRITE)
+		sc->dma_write_bytes += data->len;
+	else
+		sc->dma_read_bytes += data->len;
 
 	/* Ensure the device can see the desc */
 	bus_dmamap_sync(sc->desc_tag, sc->desc_map,
