@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  */
-/* R28S temperature monitoring with optional cached OTP correction. */
+/* R28S temperature monitor with optional OTP trim and emergency TSHUT. */
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -27,6 +27,8 @@
 #define HT_INT_EN     0x14
 #define SHUT_GPIO_EN  0x18
 #define SHUT_CRU_EN   0x1c
+#define COMP_SHUT0    0x10c
+#define HSHUT_PD      0x28
 #define DATA0	      0x2c
 #define INT_DEBOUNCE  0x14c
 #define SHUT_DEBOUNCE 0x150
@@ -87,7 +89,9 @@ struct rk3528_tsadc_softc {
 	bool calibrated;
 	int trim_millicelsius;
 	u_int trim_word;
-
+	bool protection;
+	int shutdown_millicelsius;
+	u_int shutdown_code;
 };
 static const char *clock_names[] = { "apb_pclk", "tsadc", "tsadc_tsen" };
 
@@ -116,6 +120,31 @@ rk3528_tsadc_sample(struct rk3528_tsadc_softc *sc, uint32_t *raw, int *temp)
 	}
 	return (ERANGE);
 }
+/* Round upwards like Board Support Package temp_to_code, after adding the factory offset. */
+static int
+rk3528_tsadc_trip_code(struct rk3528_tsadc_softc *sc, int corrected,
+    u_int *code)
+{
+	int nominal = corrected + sc->trim_millicelsius;
+
+	if (nominal < calibration[0].temp ||
+	    nominal > calibration[nitems(calibration) - 1].temp)
+		return (ERANGE);
+	for (u_int i = 1; i < nitems(calibration); i++) {
+		if (nominal <= calibration[i].temp) {
+			int span = calibration[i].temp -
+			    calibration[i - 1].temp;
+			*code = calibration[i - 1].code +
+			    howmany((nominal - calibration[i - 1].temp) *
+				    (calibration[i].code -
+					calibration[i - 1].code),
+				span);
+			return (0);
+		}
+	}
+	return (ERANGE);
+}
+
 static int
 rk3528_tsadc_temperature(SYSCTL_HANDLER_ARGS)
 {
@@ -140,17 +169,19 @@ rk3528_tsadc_snapshot(SYSCTL_HANDLER_ARGS)
 	struct rk3528_tsadc_softc *sc = arg1;
 	uint32_t raw;
 	int temp, error;
-	char text[256];
+	char text[384];
 
 	mtx_lock(&sc->lock);
 	error = rk3528_tsadc_sample(sc, &raw, &temp);
 	snprintf(text, sizeof(text),
-	    "raw=%u valid=%d millicelsius=%d nominal=%d calibrated=%d trim_word=%u correction=%d auto=%x qmax=%u reads=%ju invalid=%ju",
+	    "raw=%u valid=%d millicelsius=%d nominal=%d calibrated=%d trim_word=%u correction=%d auto=%x qmax=%u reads=%ju invalid=%ju protection=%d tshut_code=%u cru=%x gpio=%x source=%x",
 	    raw, error == 0, error == 0 ? temp : 0,
 	    error == 0 ? temp + sc->trim_millicelsius : 0, sc->calibrated,
-	    sc->trim_word, sc->trim_millicelsius,
-	    bus_read_4(sc->res, AUTO_CON), bus_read_4(sc->res, Q_MAX),
-	    (uintmax_t)sc->reads, (uintmax_t)sc->invalid);
+	    sc->trim_word, sc->trim_millicelsius, bus_read_4(sc->res, AUTO_CON),
+	    bus_read_4(sc->res, Q_MAX), (uintmax_t)sc->reads,
+	    (uintmax_t)sc->invalid, sc->protection,
+	    bus_read_4(sc->res, COMP_SHUT0), bus_read_4(sc->res, SHUT_CRU_EN),
+	    bus_read_4(sc->res, SHUT_GPIO_EN), bus_read_4(sc->res, AUTO_SRC));
 	mtx_unlock(&sc->lock);
 	return (sysctl_handle_string(oidp, text, 0, req));
 }
@@ -216,6 +247,45 @@ rk3528_tsadc_load_trim(struct rk3528_tsadc_softc *sc)
 }
 
 static int
+rk3528_tsadc_protect(struct rk3528_tsadc_softc *sc)
+{
+	phandle_t node = ofw_bus_get_node(sc->dev);
+	pcell_t setting;
+	int error;
+
+	if (!OF_hasprop(node, "rockchip,hw-tshut-temp"))
+		return (0);
+	if (!sc->calibrated ||
+	    OF_getencprop(node, "rockchip,hw-tshut-temp", &setting,
+		sizeof(setting)) != sizeof(setting) ||
+	    setting < 110000 || setting > 120000)
+		return (EINVAL);
+	sc->shutdown_millicelsius = setting;
+	if (OF_getencprop(node, "rockchip,hw-tshut-mode", &setting,
+		sizeof(setting)) != sizeof(setting) ||
+	    setting != 0)
+		return (EINVAL);
+	if (OF_getencprop(node, "rockchip,hw-tshut-polarity", &setting,
+		sizeof(setting)) != sizeof(setting) ||
+	    setting != 0)
+		return (EINVAL);
+	error = rk3528_tsadc_trip_code(sc, sc->shutdown_millicelsius,
+	    &sc->shutdown_code);
+	if (error != 0)
+		return (error);
+	bus_write_4(sc->res, COMP_SHUT0, sc->shutdown_code);
+	bus_write_4(sc->res, HSHUT_PD, 1);
+	bus_write_4(sc->res, SHUT_CRU_EN, 0x10001);
+	if (bus_read_4(sc->res, COMP_SHUT0) != sc->shutdown_code ||
+	    (bus_read_4(sc->res, SHUT_CRU_EN) & 1) == 0 ||
+	    (bus_read_4(sc->res, SHUT_GPIO_EN) & 1) != 0 ||
+	    (bus_read_4(sc->res, AUTO_SRC) & 1) == 0)
+		return (EIO);
+	sc->protection = true;
+	return (0);
+}
+
+static int
 rk3528_tsadc_attach(device_t dev)
 {
 	struct rk3528_tsadc_softc *sc = device_get_softc(dev);
@@ -227,10 +297,8 @@ rk3528_tsadc_attach(device_t dev)
 	int error, rid = 0, temp;
 
 	sc->dev = dev;
-	/* Hardware protection remains outside this monitoring profile. */
-	if (OF_hasprop(ofw_bus_get_node(dev), "rockchip,hw-tshut-temp") ||
-	    OF_hasprop(ofw_bus_get_node(dev), "freebsd,boot-tshut-test"))
-		return (EOPNOTSUPP);
+	if (OF_hasprop(ofw_bus_get_node(dev), "freebsd,boot-tshut-test"))
+		return (EPERM);
 	error = rk3528_tsadc_load_trim(sc);
 	if (error != 0) {
 		device_printf(dev, "OTP trim unavailable: %d\n", error);
@@ -312,6 +380,19 @@ rk3528_tsadc_attach(device_t dev)
 	}
 	if (error != 0)
 		goto fail;
+	error = rk3528_tsadc_protect(sc);
+	if (error != 0)
+		goto fail;
+	if (sc->protection) {
+		SYSCTL_ADD_INT(ctx, tree, OID_AUTO, "shutdown_millicelsius",
+		    CTLFLAG_RD, &sc->shutdown_millicelsius, 0,
+		    "Hardware emergency CRU reset threshold");
+		SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "shutdown_code",
+		    CTLFLAG_RD, &sc->shutdown_code, 0,
+		    "Factory-corrected hardware reset comparator code");
+		device_printf(dev, "Hardware CRU TSHUT=%d mC code=%u\n",
+		    sc->shutdown_millicelsius, sc->shutdown_code);
+	}
 	SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "temperature",
 	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 1,
 	    rk3528_tsadc_temperature, "IK", "CPU temperature");
@@ -321,7 +402,7 @@ rk3528_tsadc_attach(device_t dev)
 	SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "snapshot",
 	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0,
 	    rk3528_tsadc_snapshot, "A",
-	    "TSADC state and applied OTP correction");
+	    "TSADC monitor state and applied OTP correction");
 	SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "nominal_temperature_millicelsius",
 	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 2,
 	    rk3528_tsadc_temperature, "I",
@@ -334,8 +415,8 @@ rk3528_tsadc_attach(device_t dev)
 	SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "trim_word", CTLFLAG_RD,
 	    &sc->trim_word, 0, "Individual OTP trim word");
 	device_printf(dev,
-	    "raw=%u temperature=%d mC; OTP calibrated=%d correction=%d mC\n",
-	    raw, temp, sc->calibrated, sc->trim_millicelsius);
+	    "raw=%u temperature=%d mC; OTP calibrated=%d correction=%d mC; protection=%d\n",
+	    raw, temp, sc->calibrated, sc->trim_millicelsius, sc->protection);
 	return (0);
 fail:
 	device_printf(dev, "attach failed: %d\n", error);
