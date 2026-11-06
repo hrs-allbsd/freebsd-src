@@ -10,6 +10,7 @@
 #include <sys/kernel.h>
 #include <sys/module.h>
 #include <sys/rman.h>
+#include <sys/sysctl.h>
 #include <machine/bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 #include <dev/clk/clk.h>
@@ -84,6 +85,21 @@ DEFINE_CLASS_1(rk3528_usb2phy_phynode, rk3528_usb2phy_phynode_class,
     phynode_usb_class);
 
 static int
+rk3528_usb2phy_snapshot(SYSCTL_HANDLER_ARGS)
+{
+	struct rk3528_usb2phy_softc *sc = arg1;
+	char buf[220];
+
+	snprintf(buf, sizeof(buf), "otg_con=%#x utmi_status=%#x phy30=%#x "
+	    "phy94=%#x clkout=%#x vbus_det=%#x mode=%d",
+	    SYSCON_READ_4(sc->grf, 0x6004c),
+	    SYSCON_READ_4(sc->grf, 0x6006c), bus_read_4(sc->mem, 0x30),
+	    bus_read_4(sc->mem, 0x94), bus_read_4(sc->mem, 0x41c),
+	    bus_read_4(sc->mem, 0x3c), sc->mode);
+	return (sysctl_handle_string(oidp, buf, 0, req));
+}
+
+static int
 rk3528_usb2phy_probe(device_t dev)
 {
 	if (!ofw_bus_status_okay(dev) || !ofw_bus_is_compatible(dev,
@@ -146,6 +162,10 @@ rk3528_usb2phy_attach(device_t dev)
 		goto fail;
 	}
 	OF_device_register_xref(OF_xref_from_node(port), dev);
+	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "snapshot",
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0,
+	    rk3528_usb2phy_snapshot, "A", "USB2 PHY read-only snapshot");
 	return (0);
 
 fail:
