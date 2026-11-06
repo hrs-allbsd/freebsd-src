@@ -473,7 +473,7 @@ dwmmc_intr(void *arg)
 			cmd->error = MMC_ERR_TIMEOUT;
 		}
 
-		if (reg & DWMMC_DATA_ERR_FLAGS) {
+		if (reg & (DWMMC_DATA_ERR_FLAGS | SDMMC_INTMASK_HLE)) {
 			dprintf("data err 0x%08x cmd 0x%08x\n",
 				reg, cmd->opcode);
 			cmd->error = MMC_ERR_FAILED;
@@ -511,12 +511,12 @@ dwmmc_intr(void *arg)
 		reg = READ4(sc, SDMMC_IDSTS);
 		if (reg) {
 			dprintf("dma intr 0x%08x\n", reg);
-			if (reg & (SDMMC_IDINTEN_TI | SDMMC_IDINTEN_RI)) {
-				WRITE4(sc, SDMMC_IDSTS, (SDMMC_IDINTEN_TI |
-							 SDMMC_IDINTEN_RI));
-				WRITE4(sc, SDMMC_IDSTS, SDMMC_IDINTEN_NI);
+			WRITE4(sc, SDMMC_IDSTS, reg & SDMMC_IDINTEN_MASK);
+			if (reg & (SDMMC_IDINTEN_FBE | SDMMC_IDINTEN_DU |
+			    SDMMC_IDINTEN_CES | SDMMC_IDINTEN_AI))
+				cmd->error = MMC_ERR_FAILED;
+			if (reg & (SDMMC_IDINTEN_TI | SDMMC_IDINTEN_RI))
 				sc->dma_seen_done = true;
-			}
 		}
 	}
 
@@ -801,9 +801,7 @@ dwmmc_attach(device_t dev)
 
 		/* Enable DMA interrupts */
 		WRITE4(sc, SDMMC_IDSTS, SDMMC_IDINTEN_MASK);
-		WRITE4(sc, SDMMC_IDINTEN, (SDMMC_IDINTEN_NI |
-					   SDMMC_IDINTEN_RI |
-					   SDMMC_IDINTEN_TI));
+		WRITE4(sc, SDMMC_IDINTEN, SDMMC_IDINTEN_MASK);
 	}
 
 	/* Clear and disable interrups for a while */
