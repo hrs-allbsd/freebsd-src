@@ -115,6 +115,15 @@ static struct rk_cru_gate rk3528_uart_gates[] = {
 	GATE(PCLK_UART0, "pclk_uart0", "pclk_bus_root", 10, 7),
 };
 
+/* I2C1 clocks for the board RTC; no other I2C controllers are exposed. */
+static struct rk_clk rk3528_rtc_clks[] = {
+	MUX(0, "i2c1_mux", hclk_vpu_parents, 0, 79, 9, 2),
+};
+static struct rk_cru_gate rk3528_rtc_gates[] = {
+	GATE(CLK_I2C1, "clk_i2c1", "i2c1_mux", 36, 12),
+	GATE(PCLK_I2C1, "pclk_i2c1", "pclk_rkvenc_root", 36, 11),
+};
+
 /* Select the board's 24MHz path without changing its running console rate. */
 static int
 rk3528_uart0_console_clock(device_t dev)
@@ -188,7 +197,8 @@ rk3528_cru_probe(device_t dev)
 	if (!ofw_bus_status_okay(dev) ||
 	    (!ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-cru") &&
 	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-gmac-cru") &&
-	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-uart-cru")))
+	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-uart-cru") &&
+	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-rtc-cru")))
 		return (ENXIO);
 	device_set_desc(dev, "Rockchip RK3528 SDMMC0 clocks (initial support)");
 	return (BUS_PROBE_DEFAULT);
@@ -198,11 +208,12 @@ static int
 rk3528_cru_attach(device_t dev)
 {
 	struct rk_cru_softc *sc = device_get_softc(dev);
-	bool uart;
+	bool uart, rtc;
 	size_t clock_bytes, gate_bytes;
 	int error;
 
-	uart = ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-uart-cru");
+	rtc = ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-rtc-cru");
+	uart = rtc || ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-uart-cru");
 
 	sc->clks = rk3528_clks;
 	sc->nclks = nitems(rk3528_clks);
@@ -214,6 +225,8 @@ rk3528_cru_attach(device_t dev)
 		clock_bytes = sizeof(rk3528_clks) + sizeof(rk3528_net_clks);
 		if (uart)
 			clock_bytes += sizeof(rk3528_uart_clks);
+		if (rtc)
+			clock_bytes += sizeof(rk3528_rtc_clks);
 		sc->clks = malloc(clock_bytes, M_DEVBUF, M_WAITOK);
 		memcpy(sc->clks, rk3528_clks, sizeof(rk3528_clks));
 		memcpy(sc->clks + nitems(rk3528_clks), rk3528_net_clks,
@@ -222,6 +235,8 @@ rk3528_cru_attach(device_t dev)
 		gate_bytes = sizeof(rk3528_gates) + sizeof(rk3528_net_gates);
 		if (uart)
 			gate_bytes += sizeof(rk3528_uart_gates);
+		if (rtc)
+			gate_bytes += sizeof(rk3528_rtc_gates);
 		sc->gates = malloc(gate_bytes, M_DEVBUF, M_WAITOK);
 		memcpy(sc->gates, rk3528_gates, sizeof(rk3528_gates));
 		memcpy(sc->gates + nitems(rk3528_gates), rk3528_net_gates,
@@ -237,6 +252,15 @@ rk3528_cru_attach(device_t dev)
 		sc->ngates += nitems(rk3528_uart_gates);
 		sc->type = 3;
 		device_set_desc(dev, "Rockchip RK3528 SDMMC0/GMAC1/UART0 clocks");
+	}
+	if (rtc) {
+		memcpy(sc->clks + sc->nclks, rk3528_rtc_clks,
+		    sizeof(rk3528_rtc_clks));
+		sc->nclks += nitems(rk3528_rtc_clks);
+		memcpy(sc->gates + sc->ngates, rk3528_rtc_gates,
+		    sizeof(rk3528_rtc_gates));
+		sc->ngates += nitems(rk3528_rtc_gates);
+		sc->type = 4;
 	}
 	error = rk_cru_attach(dev);
 	if (error == 0 && uart)
