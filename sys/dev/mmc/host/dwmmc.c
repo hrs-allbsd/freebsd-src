@@ -406,14 +406,17 @@ dwmmc_tasklet(struct dwmmc_softc *sc)
 	KASSERT(cmd != NULL, ("%s: sc %p curcmd %p == NULL", __func__, sc, cmd));
 
 	if (!sc->use_pio && cmd->data != NULL &&
-	    cmd->error == MMC_ERR_NONE && sc->dma_map_loaded) {
-		if (!dwmmc_idmac_ready(sc->cmd_done, sc->dto_rcvd,
+	    sc->dma_map_loaded) {
+		if (cmd->error == MMC_ERR_NONE &&
+		    !dwmmc_idmac_ready(sc->cmd_done, sc->dto_rcvd,
 		    sc->dma_seen_done, sc->use_auto_stop &&
 		    (cmd->opcode == MMC_READ_MULTIPLE_BLOCK ||
 		    cmd->opcode == MMC_WRITE_MULTIPLE_BLOCK), sc->acd_rcvd))
 			return;
 		if (dma_done(sc, cmd) != 0)
 			return;
+		if (cmd->error != MMC_ERR_NONE)
+			sc->cmd_done = 1;
 	}
 
 	if (!sc->cmd_done)
@@ -474,10 +477,6 @@ dwmmc_intr(void *arg)
 			dprintf("data err 0x%08x cmd 0x%08x\n",
 				reg, cmd->opcode);
 			cmd->error = MMC_ERR_FAILED;
-			if (!sc->use_pio) {
-				dma_done(sc, cmd);
-				dma_stop(sc);
-			}
 		}
 
 		if (reg & SDMMC_INTMASK_CMD_DONE) {
@@ -1028,6 +1027,10 @@ dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 	/* Data errors and IDMAC completion may be reported together. */
 	if (!sc->dma_map_loaded)
 		return (0);
+
+	/* Stop DMA before returning an error buffer to its owner. */
+	if (cmd->error != MMC_ERR_NONE && dma_stop(sc) != 0)
+		return (EIO);
 
 	data = cmd->data;
 
