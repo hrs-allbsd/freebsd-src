@@ -1125,6 +1125,7 @@ cdce_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 
 		/* FALLTHROUGH */
 	case USB_ST_SETUP:
+tr_setup:
 		/* 
 		 * TODO: Implement support for multi frame transfers,
 		 * when the USB hardware supports it.
@@ -1152,6 +1153,11 @@ cdce_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 		DPRINTF("error = %s\n",
 		    usbd_errstr(error));
 
+		/* A host CLEAR_FEATURE(HALT) completes the old device RX with
+		 * STALLED. Requeue it after the framework resets the endpoint. */
+		if (error == USB_ERR_STALLED &&
+		    usbd_get_mode(sc->sc_ue.ue_udev) == USB_MODE_DEVICE)
+			goto tr_setup;
 		if (error != USB_ERR_CANCELLED) {
 tr_stall:
 			if (usbd_get_mode(sc->sc_ue.ue_udev) == USB_MODE_HOST) {
