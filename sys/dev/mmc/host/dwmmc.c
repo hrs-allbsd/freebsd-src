@@ -188,10 +188,11 @@ dwmmc_get1paddr(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 	sc->desc_ring_paddr = segs[0].ds_addr;
 }
 
-/* Release partially constructed resources before DMA has started. */
+/* Release partial setup state or resources of an idle, stopped controller. */
 static void
 dma_release(struct dwmmc_softc *sc)
 {
+	KASSERT(!sc->dma_map_loaded, ("cannot release a loaded DMA mapping"));
 	if (sc->buf_map != NULL)
 		bus_dmamap_destroy(sc->buf_tag, sc->buf_map);
 	if (sc->buf_tag != NULL)
@@ -908,7 +909,7 @@ dwmmc_detach(device_t dev)
 	sc = device_get_softc(dev);
 
 	DWMMC_LOCK(sc);
-	if (sc->idmac_guard && sc->dma_map_loaded) {
+	if (sc->dma_map_loaded) {
 		DWMMC_UNLOCK(sc);
 		return (EBUSY);
 	}
@@ -918,6 +919,10 @@ dwmmc_detach(device_t dev)
 		return (ret);
 
 	DWMMC_LOCK(sc);
+	if (sc->dma_map_loaded || (!sc->use_pio && dma_stop(sc) != 0)) {
+		DWMMC_UNLOCK(sc);
+		return (EBUSY);
+	}
 	WRITE4(sc, SDMMC_INTMASK, 0);
 	if (!sc->use_pio)
 		WRITE4(sc, SDMMC_IDINTEN, 0);
@@ -935,6 +940,8 @@ dwmmc_detach(device_t dev)
 	taskqueue_drain_timeout(taskqueue_bus, &sc->card_delayed_task);
 	callout_drain(&sc->dma_deadline);
 
+	if (!sc->use_pio)
+		dma_release(sc);
 	bus_release_resources(dev, dwmmc_spec, sc->res);
 
 	DWMMC_LOCK_DESTROY(sc);
