@@ -124,6 +124,17 @@ static struct rk_cru_gate rk3528_rtc_gates[] = {
 	GATE(PCLK_I2C1, "pclk_i2c1", "pclk_rkvenc_root", 36, 11),
 };
 
+/* TSADC clocks for the opt-in monitor profile. */
+static struct rk_clk rk3528_thermal_clks[] = {
+	CDIV(0, "tsadc_div", "xin24m", 0, 74, 3, 5),
+	CDIV(0, "tsadc_tsen_div", "xin24m", 0, 74, 8, 5),
+};
+static struct rk_cru_gate rk3528_thermal_gates[] = {
+	GATE(PCLK_TSADC, "pclk_tsadc", "pclk_vpu_root", 32, 14),
+	GATE(CLK_TSADC, "clk_tsadc", "tsadc_div", 32, 15),
+	GATE(CLK_TSADC_TSEN, "clk_tsadc_tsen", "tsadc_tsen_div", 33, 0),
+};
+
 /* Select the board's 24MHz path without changing its running console rate. */
 static int
 rk3528_uart0_console_clock(device_t dev)
@@ -158,6 +169,8 @@ rk3528_uart0_console_clock(device_t dev)
 static bool
 rk3528_reset_valid(struct rk_cru_softc *sc, intptr_t id)
 {
+	if (sc->type >= 5 && (id == 526 || id == 527))
+		return (true);
 	if (sc->type >= 1 && id == 453)
 		return (true);
 	return (false);
@@ -198,7 +211,8 @@ rk3528_cru_probe(device_t dev)
 	    (!ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-cru") &&
 	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-gmac-cru") &&
 	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-uart-cru") &&
-	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-rtc-cru")))
+	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-rtc-cru") &&
+	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-thermal-cru")))
 		return (ENXIO);
 	device_set_desc(dev, "Rockchip RK3528 SDMMC0 clocks (initial support)");
 	return (BUS_PROBE_DEFAULT);
@@ -208,11 +222,12 @@ static int
 rk3528_cru_attach(device_t dev)
 {
 	struct rk_cru_softc *sc = device_get_softc(dev);
-	bool uart, rtc;
+	bool uart, rtc, thermal;
 	size_t clock_bytes, gate_bytes;
 	int error;
 
-	rtc = ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-rtc-cru");
+	thermal = ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-thermal-cru");
+	rtc = thermal || ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-rtc-cru");
 	uart = rtc || ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-uart-cru");
 
 	sc->clks = rk3528_clks;
@@ -227,6 +242,8 @@ rk3528_cru_attach(device_t dev)
 			clock_bytes += sizeof(rk3528_uart_clks);
 		if (rtc)
 			clock_bytes += sizeof(rk3528_rtc_clks);
+		if (thermal)
+			clock_bytes += sizeof(rk3528_thermal_clks);
 		sc->clks = malloc(clock_bytes, M_DEVBUF, M_WAITOK);
 		memcpy(sc->clks, rk3528_clks, sizeof(rk3528_clks));
 		memcpy(sc->clks + nitems(rk3528_clks), rk3528_net_clks,
@@ -237,6 +254,8 @@ rk3528_cru_attach(device_t dev)
 			gate_bytes += sizeof(rk3528_uart_gates);
 		if (rtc)
 			gate_bytes += sizeof(rk3528_rtc_gates);
+		if (thermal)
+			gate_bytes += sizeof(rk3528_thermal_gates);
 		sc->gates = malloc(gate_bytes, M_DEVBUF, M_WAITOK);
 		memcpy(sc->gates, rk3528_gates, sizeof(rk3528_gates));
 		memcpy(sc->gates + nitems(rk3528_gates), rk3528_net_gates,
@@ -261,6 +280,15 @@ rk3528_cru_attach(device_t dev)
 		    sizeof(rk3528_rtc_gates));
 		sc->ngates += nitems(rk3528_rtc_gates);
 		sc->type = 4;
+	}
+	if (thermal) {
+		memcpy(sc->clks + sc->nclks, rk3528_thermal_clks,
+		    sizeof(rk3528_thermal_clks));
+		sc->nclks += nitems(rk3528_thermal_clks);
+		memcpy(sc->gates + sc->ngates, rk3528_thermal_gates,
+		    sizeof(rk3528_thermal_gates));
+		sc->ngates += nitems(rk3528_thermal_gates);
+		sc->type = 5;
 	}
 	error = rk_cru_attach(dev);
 	if (error == 0 && uart)
