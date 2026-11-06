@@ -203,7 +203,7 @@ rk3528_uart0_console_clock(device_t dev)
 static bool
 rk3528_reset_valid(struct rk_cru_softc *sc, intptr_t id)
 {
-	if (sc->type >= 8 && id == 529)
+	if (sc->type >= 8 && (id == 529 || id == 58))
 		return (true);
 	if (sc->type >= 6 && (id == 159 || id == 160))
 		return (true);
