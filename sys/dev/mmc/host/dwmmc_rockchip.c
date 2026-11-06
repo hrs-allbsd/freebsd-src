@@ -128,8 +128,12 @@ rockchip_dwmmc_attach(device_t dev)
 
 	switch (type) {
 	case RK2928:
-	case RK3528:
 		sc->use_pio = 1;
+		break;
+	case RK3528:
+		/* Keep PIO unless IDMAC is explicitly requested. */
+		sc->use_pio = !OF_hasprop(ofw_bus_get_node(dev),
+		    "freebsd,use-idmac");
 		break;
 	}
 
