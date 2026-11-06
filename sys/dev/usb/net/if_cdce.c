@@ -118,11 +118,15 @@ static uint32_t	cdce_m_crc32(struct mbuf *, uint32_t, uint32_t);
 static void	cdce_set_filter(struct usb_ether *);
 
 static int cdce_device_tx_queue_len;
+static int cdce_device_tx_frames = CDCE_FRAMES_MAX;
 static SYSCTL_NODE(_hw_usb, OID_AUTO, cdce, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "USB CDC-Ethernet");
 SYSCTL_INT(_hw_usb_cdce, OID_AUTO, device_tx_queue_len, CTLFLAG_RDTUN,
     &cdce_device_tx_queue_len, 0,
     "Device-mode send queue packets at attach (1..1024, 0 uses ifqmaxlen)");
+SYSCTL_INT(_hw_usb_cdce, OID_AUTO, device_tx_frames, CTLFLAG_RDTUN,
+    &cdce_device_tx_frames, 0,
+    "Device-mode ECM transmit frames per transfer at attach (1..32)");
 
 #ifdef USB_DEBUG
 static int cdce_debug = 0;
@@ -618,6 +622,7 @@ cdce_attach_post_sub(struct usb_ether *ue)
 static int
 cdce_attach(device_t dev)
 {
+	struct usb_config config[CDCE_N_TRANSFER];
 	struct cdce_softc *sc = device_get_softc(dev);
 	struct usb_ether *ue = &sc->sc_ue;
 	struct usb_attach_arg *uaa = device_get_ivars(dev);
@@ -695,7 +700,19 @@ cdce_attach(device_t dev)
 
 alloc_transfers:
 
-	pcfg = cdce_config;	/* Default Configuration */
+	memcpy(config, cdce_config, sizeof(config));
+	sc->sc_tx_frames = CDCE_FRAMES_MAX;
+	if (uaa->usb_mode == USB_MODE_DEVICE) {
+		if (cdce_device_tx_frames > 0 &&
+		    cdce_device_tx_frames <= CDCE_TX_FRAMES_MAX)
+			sc->sc_tx_frames = cdce_device_tx_frames;
+		else
+			device_printf(dev,
+			    "invalid device_tx_frames; using default\n");
+		config[CDCE_BULK_TX].frames = sc->sc_tx_frames;
+		config[CDCE_BULK_TX].bufsize = sc->sc_tx_frames * MCLBYTES;
+	}
+	pcfg = config;	/* ECM; NCM keeps its own configuration below. */
 
 	for (i = 0; i != 32; i++) {
 		error = usbd_set_alt_interface_index(uaa->device,
@@ -901,12 +918,12 @@ cdce_bulk_write_callback(struct usb_xfer *xfer, usb_error_t error)
 		if_inc_counter(ifp, IFCOUNTER_OPACKETS, aframes);
 
 		/* free all previous TX buffers */
-		cdce_free_queue(sc->sc_tx_buf, CDCE_FRAMES_MAX);
+		cdce_free_queue(sc->sc_tx_buf, CDCE_TX_FRAMES_MAX);
 
 		/* FALLTHROUGH */
 	case USB_ST_SETUP:
 tr_setup:
-		for (x = 0; x != CDCE_FRAMES_MAX; x++) {
+		for (x = 0; x != sc->sc_tx_frames; x++) {
 			m = if_dequeue(ifp);
 
 			if (m == NULL)
@@ -960,7 +977,7 @@ tr_setup:
 		    usbd_errstr(error));
 
 		/* free all previous TX buffers */
-		cdce_free_queue(sc->sc_tx_buf, CDCE_FRAMES_MAX);
+		cdce_free_queue(sc->sc_tx_buf, CDCE_TX_FRAMES_MAX);
 
 		/* count output errors */
 		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);

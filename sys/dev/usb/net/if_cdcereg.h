@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: BSD-4-Clause
  *
  * Copyright (c) 2003-2005 Craig Boston
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,6 +39,7 @@
 #define CDCE_BIT(x) (1 << (x))
 
 #define	CDCE_FRAMES_MAX	8		/* units */
+#define	CDCE_TX_FRAMES_MAX 32		/* bounded device-mode batching */
 #define	CDCE_IND_SIZE_MAX 32            /* bytes */
 
 #define	CDCE_NCM_TX_MINLEN 512		/* bytes, must be power of two */
@@ -86,7 +88,7 @@ struct cdce_softc {
 #endif
 	struct usb_xfer	*sc_xfer[CDCE_N_TRANSFER];
 	struct mbuf		*sc_rx_buf[CDCE_FRAMES_MAX];
-	struct mbuf		*sc_tx_buf[CDCE_FRAMES_MAX];
+	struct mbuf		*sc_tx_buf[CDCE_TX_FRAMES_MAX];
 
 	struct ifmedia		sc_media;
 
@@ -99,6 +101,7 @@ struct cdce_softc {
 	uint8_t sc_eaddr_str_index;
 	uint8_t	sc_ifaces_index[2];
 	uint8_t sc_notify_state;
+	uint8_t sc_tx_frames;
 #define	CDCE_NOTIFY_NETWORK_CONNECTION	0
 #define	CDCE_NOTIFY_SPEED_CHANGE	1
 #define	CDCE_NOTIFY_DONE		2
