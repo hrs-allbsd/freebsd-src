@@ -68,6 +68,7 @@ struct dwmmc_softc {
 	bool			desc_map_loaded;
 	bool			dma_map_loaded;
 	bool			dma_seen_done;
+	bool			idmac_guard, dma_fault;
 	int			dma_segments;
 	int			dma_map_error;
 	bool			pio_read_batch;

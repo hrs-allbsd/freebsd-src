@@ -756,6 +756,8 @@ dwmmc_attach(device_t dev)
 	}
 
 	DWMMC_LOCK_INIT(sc);
+	sc->idmac_guard = !sc->use_pio &&
+	    OF_hasprop(ofw_bus_get_node(dev), "freebsd,idmac-guard");
 
 	if (bus_alloc_resources(dev, dwmmc_spec, sc->res)) {
 		device_printf(dev, "could not allocate resources\n");
@@ -854,6 +856,14 @@ dwmmc_attach(device_t dev)
 	DWMMC_DMA_COUNTER(dma_write_bytes);
 	DWMMC_DMA_COUNTER(dma_map_failures);
 #undef DWMMC_DMA_COUNTER
+	SYSCTL_ADD_BOOL(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "idmac_guard", CTLFLAG_RD, &sc->idmac_guard, 0,
+	    "Reset IDMAC after transfers and latch DMA faults");
+	SYSCTL_ADD_BOOL(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "dma_fault", CTLFLAG_RD, &sc->dma_fault, 0,
+	    "Latched DMA fault; reboot required");
 
 	TASK_INIT(&sc->card_task, 0, dwmmc_card_task, sc);
 	TIMEOUT_TASK_INIT(taskqueue_bus, &sc->card_delayed_task, 0,
@@ -1059,9 +1069,19 @@ dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 	if (!sc->dma_map_loaded)
 		return (0);
 
-	/* Stop DMA before returning an error buffer to its owner. */
-	if (cmd->error != MMC_ERR_NONE && dma_stop(sc) != 0)
-		return (EIO);
+	/* A guarded fault must prevent further requests on this card. */
+	if (sc->idmac_guard && cmd->error != MMC_ERR_NONE)
+		sc->dma_fault = true;
+	/* Guarded transfers reset IDMAC even after successful completion. */
+	if (cmd->error != MMC_ERR_NONE || sc->idmac_guard) {
+		if (dma_stop(sc) != 0) {
+			if (sc->idmac_guard) {
+				cmd->error = MMC_ERR_FAILED;
+				sc->dma_fault = true;
+			}
+			return (EIO);
+		}
+	}
 
 	bus_dmamap_sync(sc->desc_tag, sc->desc_map,
 	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
@@ -1069,7 +1089,9 @@ dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 		for (idx = 0; idx < sc->dma_segments; idx++) {
 			if (sc->desc_ring[idx].des0 & (DES0_OWN | DES0_CES)) {
 				cmd->error = MMC_ERR_FAILED;
-				if (dma_stop(sc) != 0)
+				if (sc->idmac_guard)
+					sc->dma_fault = true;
+				else if (dma_stop(sc) != 0)
 					return (EIO);
 				break;
 			}
@@ -1146,6 +1168,12 @@ dma_prepare(struct dwmmc_softc *sc, struct mmc_command *cmd)
 		}
 		sc->dma_map_failures++;
 		return (err != 0 ? err : sc->dma_map_error);
+	}
+
+	if (sc->idmac_guard) {
+		WRITE4(sc, SDMMC_IDSTS, SDMMC_IDINTEN_MASK);
+		WRITE4(sc, SDMMC_DBADDR, sc->desc_ring_paddr);
+		WRITE4(sc, SDMMC_IDINTEN, SDMMC_IDINTEN_MASK);
 	}
 
 	sc->dma_started++;
@@ -1417,8 +1445,27 @@ dwmmc_next_operation(struct dwmmc_softc *sc)
 	 * mostly caused by multi-block write command
 	 * followed by single-read.
 	 */
-	while (READ4(sc, SDMMC_STATUS) & (SDMMC_STATUS_DATA_BUSY))
-		continue;
+	if (sc->idmac_guard) {
+		int i;
+
+		for (i = 0; !sc->dma_fault && i < 100000; i++) {
+			if ((READ4(sc, SDMMC_STATUS) & SDMMC_STATUS_DATA_BUSY) == 0)
+				break;
+			DELAY(10);
+		}
+		if (i == 100000) {
+			sc->dma_fault = true;
+			cmd->error = MMC_ERR_TIMEOUT;
+		}
+		if (sc->dma_fault) {
+			if (cmd->error == MMC_ERR_NONE)
+				cmd->error = MMC_ERR_FAILED;
+			sc->flags &= ~(PENDING_CMD | PENDING_STOP);
+		}
+	} else {
+		while (READ4(sc, SDMMC_STATUS) & SDMMC_STATUS_DATA_BUSY)
+			continue;
+	}
 
 	if (sc->flags & PENDING_CMD) {
 		sc->flags &= ~PENDING_CMD;
@@ -1454,6 +1501,10 @@ dwmmc_request(device_t brdev, device_t reqdev, struct mmc_request *req)
 	sc = device_get_softc(brdev);
 
 	DWMMC_LOCK(sc);
+	if (sc->idmac_guard && sc->dma_fault) {
+		DWMMC_UNLOCK(sc);
+		return (ENXIO);
+	}
 	if (sc->req != NULL) {
 		DWMMC_UNLOCK(sc);
 		return (EBUSY);
@@ -1712,6 +1763,13 @@ dwmmc_cam_request(device_t dev, union ccb *ccb)
 
 	sc = device_get_softc(dev);
 	DWMMC_LOCK(sc);
+	if (sc->idmac_guard && sc->dma_fault) {
+		ccb->mmcio.cmd.error = MMC_ERR_FAILED;
+		ccb->ccb_h.status = CAM_REQ_CMP_ERR;
+		DWMMC_UNLOCK(sc);
+		xpt_done(ccb);
+		return (0);
+	}
 
 	KASSERT(ccb->ccb_h.pinfo.index == CAM_ACTIVE_INDEX,
 	    ("%s: ccb %p index %d != CAM_ACTIVE_INDEX: func=%#x %s status %#x\n",
