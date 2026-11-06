@@ -405,6 +405,17 @@ dwmmc_tasklet(struct dwmmc_softc *sc)
 	cmd = sc->curcmd;
 	KASSERT(cmd != NULL, ("%s: sc %p curcmd %p == NULL", __func__, sc, cmd));
 
+	if (!sc->use_pio && cmd->data != NULL &&
+	    cmd->error == MMC_ERR_NONE && sc->dma_map_loaded) {
+		if (!dwmmc_idmac_ready(sc->cmd_done, sc->dto_rcvd,
+		    sc->dma_seen_done, sc->use_auto_stop &&
+		    (cmd->opcode == MMC_READ_MULTIPLE_BLOCK ||
+		    cmd->opcode == MMC_WRITE_MULTIPLE_BLOCK), sc->acd_rcvd))
+			return;
+		if (dma_done(sc, cmd) != 0)
+			return;
+	}
+
 	if (!sc->cmd_done)
 		return;
 
@@ -505,7 +516,7 @@ dwmmc_intr(void *arg)
 				WRITE4(sc, SDMMC_IDSTS, (SDMMC_IDINTEN_TI |
 							 SDMMC_IDINTEN_RI));
 				WRITE4(sc, SDMMC_IDSTS, SDMMC_IDINTEN_NI);
-				dma_done(sc, cmd);
+				sc->dma_seen_done = true;
 			}
 		}
 	}
@@ -1076,6 +1087,7 @@ dma_prepare(struct dwmmc_softc *sc, struct mmc_command *cmd)
 	dprintf("%s: bus_dmamap_load size: %zu\n", __func__, data->len);
 	sc->dma_map_error = 0;
 	sc->dma_map_loaded = false;
+	sc->dma_seen_done = false;
 	err = bus_dmamap_load(sc->buf_tag, sc->buf_map,
 		data->data, data->len, dwmmc_ring_setup,
 		sc, BUS_DMA_NOWAIT);

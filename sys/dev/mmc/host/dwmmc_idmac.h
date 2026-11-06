@@ -14,4 +14,10 @@ dwmmc_idmac_segment_valid(unsigned long long address, unsigned long long length)
 	    length - 1 <= 0xffffffffULL - address);
 }
 
+static inline int
+dwmmc_idmac_ready(int command, int data, int dma, int auto_stop, int stop)
+{
+	return (command && data && dma && (!auto_stop || stop));
+}
+
 #endif
