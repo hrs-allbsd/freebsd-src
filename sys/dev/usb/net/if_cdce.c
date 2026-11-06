@@ -1003,6 +1003,12 @@ cdce_init(struct usb_ether *ue)
 
 	/* start data transfers */
 	cdce_start(ue);
+	/*
+	 * Device mode has no interrupt-IN receiver to report carrier.
+	 * The configured USB connection is the link; detach handles disconnect.
+	 */
+	if (usbd_get_mode(sc->sc_ue.ue_udev) == USB_MODE_DEVICE)
+		if_link_state_change(ifp, LINK_STATE_UP);
 }
 
 static void
@@ -1014,6 +1020,8 @@ cdce_stop(struct usb_ether *ue)
 	CDCE_LOCK_ASSERT(sc, MA_OWNED);
 
 	if_setdrvflagbits(ifp, 0, IFF_DRV_RUNNING);
+	if (usbd_get_mode(sc->sc_ue.ue_udev) == USB_MODE_DEVICE)
+		if_link_state_change(ifp, LINK_STATE_DOWN);
 
 	/*
 	 * stop all the transfers, if not already stopped:
