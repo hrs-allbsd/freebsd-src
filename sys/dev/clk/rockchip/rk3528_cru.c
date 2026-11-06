@@ -26,6 +26,14 @@
 
 #include "hwreset_if.h"
 
+/* pclk_vo_root supplies the CRU's own register interface. Keep a lifetime
+ * reference in profiles that expose consumers of this critical root.
+ */
+struct rk3528_cru_softc {
+	struct rk_cru_softc base;
+	clk_t critical_pclk_vo;
+};
+
 #define CRU_CLKSEL_CON(n) (0x300 + (n) * 4)
 #define CRU_CLKGATE_CON(n) (0x800 + (n) * 4)
 
@@ -135,6 +143,17 @@ static struct rk_cru_gate rk3528_thermal_gates[] = {
 	GATE(CLK_TSADC_TSEN, "clk_tsadc_tsen", "tsadc_tsen_div", 33, 0),
 };
 
+/* Only the non-secure read controller used for the TSADC trim word. */
+static struct rk_clk rk3528_trim_clks[] = {
+	MUX(0, "pclk_vo_mux", pclk_parents, 0, 83, 4, 2),
+	FFACT(CLK_USER_OTPC_NS, "clk_user_otpc_ns", "clk_sbpi_otpc_ns", 1, 2),
+};
+static struct rk_cru_gate rk3528_trim_gates[] = {
+	GATE(PCLK_VO_ROOT, "pclk_vo_root", "pclk_vo_mux", 39, 2),
+	GATE(PCLK_OTPC_NS, "pclk_otpc_ns", "pclk_vo_root", 42, 11),
+	GATE(CLK_SBPI_OTPC_NS, "clk_sbpi_otpc_ns", "xin24m", 42, 12),
+};
+
 /* Select the board's 24MHz path without changing its running console rate. */
 static int
 rk3528_uart0_console_clock(device_t dev)
@@ -212,7 +231,8 @@ rk3528_cru_probe(device_t dev)
 	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-sdmmc-gmac-cru") &&
 	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-uart-cru") &&
 	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-rtc-cru") &&
-	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-thermal-cru")))
+	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-thermal-cru") &&
+	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-trim-cru")))
 		return (ENXIO);
 	device_set_desc(dev, "Rockchip RK3528 SDMMC0 clocks (initial support)");
 	return (BUS_PROBE_DEFAULT);
@@ -221,12 +241,14 @@ rk3528_cru_probe(device_t dev)
 static int
 rk3528_cru_attach(device_t dev)
 {
-	struct rk_cru_softc *sc = device_get_softc(dev);
-	bool uart, rtc, thermal;
+	struct rk3528_cru_softc *rsc = device_get_softc(dev);
+	struct rk_cru_softc *sc = &rsc->base;
+	bool uart, rtc, thermal, trim;
 	size_t clock_bytes, gate_bytes;
 	int error;
 
-	thermal = ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-thermal-cru");
+	trim = ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-trim-cru");
+	thermal = trim || ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-thermal-cru");
 	rtc = thermal || ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-rtc-cru");
 	uart = rtc || ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-uart-cru");
 
@@ -244,6 +266,8 @@ rk3528_cru_attach(device_t dev)
 			clock_bytes += sizeof(rk3528_rtc_clks);
 		if (thermal)
 			clock_bytes += sizeof(rk3528_thermal_clks);
+		if (trim)
+			clock_bytes += sizeof(rk3528_trim_clks);
 		sc->clks = malloc(clock_bytes, M_DEVBUF, M_WAITOK);
 		memcpy(sc->clks, rk3528_clks, sizeof(rk3528_clks));
 		memcpy(sc->clks + nitems(rk3528_clks), rk3528_net_clks,
@@ -256,6 +280,8 @@ rk3528_cru_attach(device_t dev)
 			gate_bytes += sizeof(rk3528_rtc_gates);
 		if (thermal)
 			gate_bytes += sizeof(rk3528_thermal_gates);
+		if (trim)
+			gate_bytes += sizeof(rk3528_trim_gates);
 		sc->gates = malloc(gate_bytes, M_DEVBUF, M_WAITOK);
 		memcpy(sc->gates, rk3528_gates, sizeof(rk3528_gates));
 		memcpy(sc->gates + nitems(rk3528_gates), rk3528_net_gates,
@@ -290,7 +316,29 @@ rk3528_cru_attach(device_t dev)
 		sc->ngates += nitems(rk3528_thermal_gates);
 		sc->type = 5;
 	}
+	if (trim) {
+		memcpy(sc->clks + sc->nclks, rk3528_trim_clks,
+		    sizeof(rk3528_trim_clks));
+		sc->nclks += nitems(rk3528_trim_clks);
+		memcpy(sc->gates + sc->ngates, rk3528_trim_gates,
+		    sizeof(rk3528_trim_gates));
+		sc->ngates += nitems(rk3528_trim_gates);
+	}
 	error = rk_cru_attach(dev);
+	if (error == 0 && trim) {
+		error = clk_get_by_name(dev, "pclk_vo_root", &rsc->critical_pclk_vo);
+		if (error == 0) {
+			error = clk_enable(rsc->critical_pclk_vo);
+			if (error != 0) {
+				clk_release(rsc->critical_pclk_vo);
+				rsc->critical_pclk_vo = NULL;
+			}
+		}
+		if (error == 0)
+			device_printf(dev,
+			    "Retained critical pclk_vo_root for CRU register access\n");
+	}
+
 	if (error == 0 && uart)
 		error = rk3528_uart0_console_clock(dev);
 	return (error);
@@ -304,6 +352,6 @@ static device_method_t rk3528_cru_methods[] = {
 	DEVMETHOD_END
 };
 DEFINE_CLASS_1(rk3528_cru, rk3528_cru_driver, rk3528_cru_methods,
-    sizeof(struct rk_cru_softc), rk_cru_driver);
+    sizeof(struct rk3528_cru_softc), rk_cru_driver);
 EARLY_DRIVER_MODULE(rk3528_cru, simplebus, rk3528_cru_driver, 0, 0,
     BUS_PASS_BUS + BUS_PASS_ORDER_MIDDLE);
