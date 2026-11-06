@@ -160,6 +160,15 @@ static struct rk_cru_gate rk3528_wdt_gates[] = {
 	GATE(TCLK_WDT_NS, "tclk_wdt_ns", "xin24m", 10, 0),
 };
 
+/* USB2 OTG clocks; the combo PHY stays assigned to PCIe. */
+static struct rk_cru_gate rk3528_usb_gates[] = {
+	GATE(PCLK_USBPHY, "pclk_usbphy", "pclk_vo_root", 43, 13),
+	GATE(CLK_REF_USBPHY, "clk_ref_usbphy", "xin24m", 43, 14),
+	GATE(CLK_REF_USB3OTG, "clk_ref_usb3otg", "xin24m", 33, 2),
+	GATE(CLK_SUSPEND_USB3OTG, "clk_suspend_usb3otg", "xin24m", 33, 4),
+	GATE(ACLK_USB3OTG, "aclk_usb3otg", "aclk_vpu_l_root", 33, 1),
+};
+
 /* Select the board's 24MHz path without changing its running console rate. */
 static int
 rk3528_uart0_console_clock(device_t dev)
@@ -194,6 +203,8 @@ rk3528_uart0_console_clock(device_t dev)
 static bool
 rk3528_reset_valid(struct rk_cru_softc *sc, intptr_t id)
 {
+	if (sc->type >= 8 && id == 529)
+		return (true);
 	if (sc->type >= 6 && (id == 159 || id == 160))
 		return (true);
 	if (sc->type >= 5 && (id == 526 || id == 527))
@@ -241,7 +252,8 @@ rk3528_cru_probe(device_t dev)
 	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-rtc-cru") &&
 	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-thermal-cru") &&
 	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-trim-cru") &&
-	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-watchdog-cru")))
+	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-watchdog-cru") &&
+	    !ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-usb-cru")))
 		return (ENXIO);
 	device_set_desc(dev, "Rockchip RK3528 SDMMC0 clocks (initial support)");
 	return (BUS_PROBE_DEFAULT);
@@ -252,11 +264,12 @@ rk3528_cru_attach(device_t dev)
 {
 	struct rk3528_cru_softc *rsc = device_get_softc(dev);
 	struct rk_cru_softc *sc = &rsc->base;
-	bool uart, rtc, thermal, trim, wdt;
+	bool uart, rtc, thermal, trim, wdt, usb;
 	size_t clock_bytes, gate_bytes;
 	int error;
 
-	wdt = ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-watchdog-cru");
+	usb = ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-usb-cru");
+	wdt = usb || ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-watchdog-cru");
 	trim = wdt || ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-trim-cru");
 	thermal = trim || ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-thermal-cru");
 	rtc = thermal || ofw_bus_is_compatible(dev, "freebsd,rk3528-r28s-rtc-cru");
@@ -294,6 +307,8 @@ rk3528_cru_attach(device_t dev)
 			gate_bytes += sizeof(rk3528_trim_gates);
 		if (wdt)
 			gate_bytes += sizeof(rk3528_wdt_gates);
+		if (usb)
+			gate_bytes += sizeof(rk3528_usb_gates);
 		sc->gates = malloc(gate_bytes, M_DEVBUF, M_WAITOK);
 		memcpy(sc->gates, rk3528_gates, sizeof(rk3528_gates));
 		memcpy(sc->gates + nitems(rk3528_gates), rk3528_net_gates,
@@ -341,6 +356,12 @@ rk3528_cru_attach(device_t dev)
 		    sizeof(rk3528_wdt_gates));
 		sc->ngates += nitems(rk3528_wdt_gates);
 		sc->type = 6;
+	}
+	if (usb) {
+		memcpy(sc->gates + sc->ngates, rk3528_usb_gates,
+		    sizeof(rk3528_usb_gates));
+		sc->ngates += nitems(rk3528_usb_gates);
+		sc->type = 8;
 	}
 	error = rk_cru_attach(dev);
 	if (error == 0 && trim) {
