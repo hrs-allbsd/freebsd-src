@@ -8,6 +8,7 @@
 #include <sys/bus.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
+#include <sys/proc.h>
 #include <sys/rman.h>
 #include <sys/sysctl.h>
 
@@ -132,24 +133,68 @@ rk3528_otp_identity(const uint8_t id[CHIP_ID_BYTES], char serial[38],
 	return (0);
 }
 
-/* Derive diagnostic identities without configuring any consumer. */
+/* Called in early bus enumeration, before GMAC and USB enumerate. Update
+ * only an existing six-byte placeholder so FDT node offsets never move.
+ * USB templates are initialized at SI_SUB_LOCK; absent templates are fine.
+ */
 static int
-rk3528_otp_prepare_identity(device_t dev)
+rk3528_otp_publish_identity(device_t dev)
 {
 	struct rk3528_otp_trim_softc *sc = device_get_softc(dev);
-	uint8_t gmac[6], usb[6], pcie[6];
+	phandle_t xref, node;
+	uint8_t gmac[6], usb[6], pcie[6], previous[6];
+	const char *names[] = { "hw.usb.templates.1.mac",
+		"hw.usb.templates.1.serial_number",
+		"hw.usb.templates.3.serial_number" };
+	char *value;
 	int error;
 
 	error = rk3528_otp_identity(sc->chip_id, sc->serial, gmac, usb, pcie);
 	if (error != 0)
 		return (error);
+	if (OF_getencprop(ofw_bus_get_node(dev), "freebsd,identity-gmac", &xref,
+		sizeof(xref)) != sizeof(xref))
+		return (ENOENT);
+	node = OF_node_from_xref(xref);
+	if (!ofw_bus_node_is_compatible(node, "rockchip,rk3528-gmac") ||
+	    OF_getprop(node, "local-mac-address", previous, sizeof(previous)) !=
+		6)
+		return (EINVAL);
+	/* A nonzero firmware/user MAC has precedence over our placeholder. */
+	if (memcmp(previous, (uint8_t[6]) { 0 }, 6) == 0 &&
+	    OF_setprop(node, "local-mac-address", gmac, 6) != 0)
+		return (EIO);
 	snprintf(sc->gmac, sizeof(sc->gmac), "%02x:%02x:%02x:%02x:%02x:%02x",
 	    gmac[0], gmac[1], gmac[2], gmac[3], gmac[4], gmac[5]);
 	snprintf(sc->usb_mac, sizeof(sc->usb_mac), "%02X%02X%02X%02X%02X%02X",
 	    usb[0], usb[1], usb[2], usb[3], usb[4], usb[5]);
 	snprintf(sc->pcie_mac, sizeof(sc->pcie_mac),
-	    "%02x:%02x:%02x:%02x:%02x:%02x", pcie[0], pcie[1], pcie[2],
-	    pcie[3], pcie[4], pcie[5]);
+	    "%02x:%02x:%02x:%02x:%02x:%02x", pcie[0], pcie[1], pcie[2], pcie[3],
+	    pcie[4], pcie[5]);
+	/* This board has one onboard re(4) at unit zero. The endpoint has no
+	 * usable cold-start address; do not depend on warm-reset MAC registers.
+	 * An explicit loader hint has precedence over this board default.
+	 */
+	value = kern_getenv("hint.re.0.mac");
+	if (value != NULL)
+		freeenv(value);
+	else if (kern_setenv("hint.re.0.mac", sc->pcie_mac) != 0)
+		return (ENOSPC);
+
+	for (unsigned i = 0; i < nitems(names); i++) {
+		/* Keep explicitly configured loader tunables. */
+		value = kern_getenv(names[i]);
+		if (value != NULL) {
+			freeenv(value);
+			continue;
+		}
+		value = i == 0 ? sc->usb_mac : sc->serial;
+		error = kernel_sysctlbyname(curthread,
+		    __DECONST(char *, names[i]), NULL, NULL, value,
+		    strlen(value) + 1, NULL, 0);
+		if (error != 0 && error != ENOENT)
+			return (error);
+	}
 	sc->identity_valid = 1;
 	return (0);
 }
@@ -260,17 +305,17 @@ out:
 		return (error);
 	}
 	if (identity) {
-		error = rk3528_otp_prepare_identity(dev);
+		error = rk3528_otp_publish_identity(dev);
 		if (error != 0) {
 			device_printf(dev,
-			    "board identity preparation failed: %d\n", error);
+			    "board identity publication failed: %d\n", error);
 			return (error);
 		}
 	}
 	SYSCTL_ADD_UINT(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "identity_valid", CTLFLAG_RD, &sc->identity_valid, 0,
-	    "Chip-ID identities derived successfully");
+	    "Public chip-ID identity initialized before device attach");
 	SYSCTL_ADD_UINT(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "identity_reads", CTLFLAG_RD, &sc->identity_reads, 0,
@@ -282,15 +327,15 @@ out:
 	SYSCTL_ADD_STRING(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "gmac",
 	    CTLFLAG_RD, sc->gmac, sizeof(sc->gmac),
-	    "Derived GMAC1 address; not installed");
+	    "Chip-ID derived GMAC1 default (firmware MAC has precedence)");
 	SYSCTL_ADD_STRING(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "usb_mac",
 	    CTLFLAG_RD, sc->usb_mac, sizeof(sc->usb_mac),
-	    "Derived ECM host MAC; not installed");
+	    "Chip-ID derived ECM host MAC default (loader tunable has precedence)");
 	SYSCTL_ADD_STRING(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "pcie_mac",
 	    CTLFLAG_RD, sc->pcie_mac, sizeof(sc->pcie_mac),
-	    "Derived onboard re0 MAC; not installed");
+	    "Chip-ID derived onboard re0 MAC default (loader hint has precedence)");
 
 	OF_device_register_xref(OF_xref_from_node(ofw_bus_get_node(dev)), dev);
 	SYSCTL_ADD_UINT(device_get_sysctl_ctx(dev),
