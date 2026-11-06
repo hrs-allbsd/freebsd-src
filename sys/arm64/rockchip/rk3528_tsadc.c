@@ -6,6 +6,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
+#include <sys/callout.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
@@ -89,9 +90,10 @@ struct rk3528_tsadc_softc {
 	bool calibrated;
 	int trim_millicelsius;
 	u_int trim_word;
-	bool protection;
-	int shutdown_millicelsius;
-	u_int shutdown_code;
+	bool protection, warning_active, monitor_started;
+	int warning_millicelsius, shutdown_millicelsius;
+	u_int shutdown_code, warnings;
+	struct callout monitor;
 };
 static const char *clock_names[] = { "apb_pclk", "tsadc", "tsadc_tsen" };
 
@@ -143,6 +145,55 @@ rk3528_tsadc_trip_code(struct rk3528_tsadc_softc *sc, int corrected,
 		}
 	}
 	return (ERANGE);
+}
+
+/* Called with the sensor lock held. Warning policy does not change CPU rate. */
+static void
+rk3528_tsadc_monitor(void *arg)
+{
+	struct rk3528_tsadc_softc *sc = arg;
+	uint32_t raw;
+	int temp;
+
+	mtx_assert(&sc->lock, MA_OWNED);
+	if (!sc->monitor_started)
+		return;
+	if (rk3528_tsadc_sample(sc, &raw, &temp) == 0) {
+		if (!sc->warning_active && temp >= sc->warning_millicelsius) {
+			sc->warning_active = true;
+			sc->warnings++;
+			device_printf(sc->dev,
+			    "Temperature warning: %d mC >= %d mC\n", temp,
+			    sc->warning_millicelsius);
+		} else if (sc->warning_active &&
+		    temp < sc->warning_millicelsius - 2000) {
+			sc->warning_active = false;
+			device_printf(sc->dev,
+			    "Temperature warning cleared: %d mC\n", temp);
+		}
+	}
+	callout_reset(&sc->monitor, hz, rk3528_tsadc_monitor, sc);
+}
+
+static int
+rk3528_tsadc_warning_limit(SYSCTL_HANDLER_ARGS)
+{
+	struct rk3528_tsadc_softc *sc = arg1;
+	int value, error;
+
+	mtx_lock(&sc->lock);
+	value = sc->warning_millicelsius;
+	mtx_unlock(&sc->lock);
+	error = sysctl_handle_int(oidp, &value, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (value < 40000 || value > 110000 ||
+	    value > sc->shutdown_millicelsius - 2000)
+		return (EINVAL);
+	mtx_lock(&sc->lock);
+	sc->warning_millicelsius = value;
+	mtx_unlock(&sc->lock);
+	return (0);
 }
 
 static int
@@ -197,6 +248,12 @@ rk3528_tsadc_probe(device_t dev)
 static void
 rk3528_tsadc_release(struct rk3528_tsadc_softc *sc)
 {
+	if (sc->monitor_started) {
+		mtx_lock(&sc->lock);
+		sc->monitor_started = false;
+		mtx_unlock(&sc->lock);
+		callout_drain(&sc->monitor);
+	}
 	if (sc->active) {
 		bus_write_4(sc->res, SHUT_CRU_EN, 1u << 16);
 		bus_write_4(sc->res, AUTO_CON, 1u << 16);
@@ -261,6 +318,7 @@ rk3528_tsadc_protect(struct rk3528_tsadc_softc *sc)
 	    setting < 110000 || setting > 120000)
 		return (EINVAL);
 	sc->shutdown_millicelsius = setting;
+	sc->warning_millicelsius = 95000;
 	if (OF_getencprop(node, "rockchip,hw-tshut-mode", &setting,
 		sizeof(setting)) != sizeof(setting) ||
 	    setting != 0)
@@ -384,14 +442,28 @@ rk3528_tsadc_attach(device_t dev)
 	if (error != 0)
 		goto fail;
 	if (sc->protection) {
+		SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "warning_millicelsius",
+		    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+		    rk3528_tsadc_warning_limit, "I",
+		    "Software warning threshold; 2 C hysteresis");
+		SYSCTL_ADD_BOOL(ctx, tree, OID_AUTO, "warning_active",
+		    CTLFLAG_RD, &sc->warning_active, 0,
+		    "Software temperature warning active");
+		SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "warnings", CTLFLAG_RD,
+		    &sc->warnings, 0, "Software warning transitions");
 		SYSCTL_ADD_INT(ctx, tree, OID_AUTO, "shutdown_millicelsius",
 		    CTLFLAG_RD, &sc->shutdown_millicelsius, 0,
 		    "Hardware emergency CRU reset threshold");
 		SYSCTL_ADD_UINT(ctx, tree, OID_AUTO, "shutdown_code",
 		    CTLFLAG_RD, &sc->shutdown_code, 0,
 		    "Factory-corrected hardware reset comparator code");
-		device_printf(dev, "Hardware CRU TSHUT=%d mC code=%u\n",
-		    sc->shutdown_millicelsius, sc->shutdown_code);
+		callout_init_mtx(&sc->monitor, &sc->lock, 0);
+		sc->monitor_started = true;
+		callout_reset(&sc->monitor, hz, rk3528_tsadc_monitor, sc);
+		device_printf(dev,
+		    "Hardware CRU TSHUT=%d mC code=%u; software warning=%d mC\n",
+		    sc->shutdown_millicelsius, sc->shutdown_code,
+		    sc->warning_millicelsius);
 	}
 	SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "temperature",
 	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 1,
