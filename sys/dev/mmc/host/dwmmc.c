@@ -240,6 +240,7 @@ dwmmc_ring_setup(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 		return;
 	}
 
+	sc->dma_segments = nsegs;
 	for (idx = 0; idx < nsegs; idx++) {
 		sc->desc_ring[idx].des0 = DES0_DIC | DES0_CH;
 		sc->desc_ring[idx].des1 = segs[idx].ds_len & DES1_BS1_MASK;
@@ -1021,6 +1022,7 @@ static int
 dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 {
 	struct mmc_data *data;
+	int idx;
 
 	/* Data errors and IDMAC completion may be reported together. */
 	if (!sc->dma_map_loaded)
@@ -1030,6 +1032,19 @@ dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 	if (cmd->error != MMC_ERR_NONE && dma_stop(sc) != 0)
 		return (EIO);
 
+	bus_dmamap_sync(sc->desc_tag, sc->desc_map,
+	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
+	if (cmd->error == MMC_ERR_NONE) {
+		for (idx = 0; idx < sc->dma_segments; idx++) {
+			if (sc->desc_ring[idx].des0 & (DES0_OWN | DES0_CES)) {
+				cmd->error = MMC_ERR_FAILED;
+				if (dma_stop(sc) != 0)
+					return (EIO);
+				break;
+			}
+		}
+	}
+
 	data = cmd->data;
 
 	if (data->flags & MMC_DATA_WRITE)
@@ -1038,9 +1053,6 @@ dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 	else
 		bus_dmamap_sync(sc->buf_tag, sc->buf_map,
 			BUS_DMASYNC_POSTREAD);
-
-	bus_dmamap_sync(sc->desc_tag, sc->desc_map,
-	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
 	bus_dmamap_unload(sc->buf_tag, sc->buf_map);
 	sc->dma_map_loaded = false;
