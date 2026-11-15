@@ -195,6 +195,26 @@
 			rockchip,pins = <4 23 1 &pull_up>, <4 24 1 &pull_up>;
 		};
 
+		pull_none_drv2: pull-none-drv2 {
+			bias-disable;
+			drive-strength = <2>;
+		};
+
+		gmac_pins: gmac-pins {
+			rockchip,pins = <3 14 2 &pull_none_drv2>,
+			    <3 15 2 &pull_none_drv2>, <3 3 2 &pull_none>,
+			    <3 2 2 &pull_none>, <3 18 2 &pull_none>,
+			    <3 1 2 &pull_none_drv2>, <3 0 2 &pull_none_drv2>,
+			    <3 16 2 &pull_none>, <3 5 2 &pull_none>,
+			    <3 4 2 &pull_none_drv2>, <3 7 2 &pull_none>,
+			    <3 6 2 &pull_none>, <3 9 2 &pull_none_drv2>,
+			    <3 8 2 &pull_none_drv2>, <3 13 2 &pull_none_drv2>;
+		};
+
+		gmac_reset_pin: gmac-reset-pin {
+			rockchip,pins = <4 18 0 &pull_none>;
+		};
+
 		pull_up_drv2: pull-up-drv2 {
 			bias-pull-up;
 			drive-strength = <2>;
@@ -214,6 +234,45 @@
 		#size-cells = <2>;
 		ranges;
 
+		grf: syscon@ff300000 {
+			compatible = "syscon", "simple-mfd";
+			reg = <0 0xff300000 0 0x90000>;
+		};
+
+		gmac1: ethernet@ffbe0000 {
+			compatible = "rockchip,rk3528-gmac";
+			reg = <0 0xffbe0000 0 0x10000>;
+			interrupts = <0 121 4>;
+			rockchip,grf = <&grf>;
+			clocks = <&cru CLK_GMAC1_SRC_VPU>,
+			    <&cru PCLK_MAC_VPU>, <&cru ACLK_MAC_VPU>;
+			clock-names = "stmmaceth", "pclk_mac", "aclk_mac";
+			/* Raw index in this FreeBSD prototype CRU binding only. */
+			resets = <&cru 453>;
+			reset-names = "stmmaceth";
+			phy-mode = "rgmii-rxid";
+			clock_in_out = "output";
+			tx_delay = <0x30>;
+			snps,mixed-burst;
+			snps,pbl = <8>;
+			phy-handle = <&phy1>;
+			status = "okay";
+			/* PHY supply is enabled by the boot firmware. */
+			pinctrl-names = "default";
+			pinctrl-0 = <&gmac_pins &gmac_reset_pin>;
+			snps,reset-gpio = <&gpio4 18 GPIO_ACTIVE_LOW>;
+			snps,reset-active-low;
+			snps,reset-delays-us = <0 20000 100000>;
+			mdio {
+				compatible = "snps,dwmac-mdio";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				phy1: ethernet-phy@1 {
+					reg = <1>;
+				};
+			};
+		};
+
 		ioc: syscon@ff540000 {
 			compatible = "rockchip,rk3528-ioc-grf", "syscon";
 			reg = <0 0xff540000 0 0x40000>;
@@ -223,6 +282,7 @@
 			compatible = "freebsd,rk3528-r28s-uart-cru";
 			reg = <0 0xff4a0000 0 0x21000>;
 			#clock-cells = <1>;
+			#reset-cells = <1>;
 		};
 
 		sdmmc: mmc@ffc30000 {
