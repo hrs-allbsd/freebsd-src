@@ -11,6 +11,7 @@ DTS=	\
 	rockchip/rk3399-khadas-edge-v.dts \
 	rockchip/rk3399-nanopc-t4.dts \
 	rockchip/rk3328-nanopi-r2s.dts \
+	rockchip/rk3528-nanopi-r28s.dts \
 	rockchip/rk3399-nanopi-r4s.dts \
 	rockchip/rk3399-rock-4c-plus.dts \
 	rockchip/rk3399-rock-pi-4.dts \
