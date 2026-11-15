@@ -882,3 +882,5 @@ arm64/rockchip/rk3528_wdt.c	optional rk3528_wdt fdt
 arm64/rockchip/rk3528_otp_trim.c	optional rk3528_otp_trim nvmem fdt
 
 arm64/rockchip/rk3528_tsadc.c	optional rk3528_tsadc nvmem fdt
+
+arm64/rockchip/rk3528_crypto.c	optional rkcrypto fdt
