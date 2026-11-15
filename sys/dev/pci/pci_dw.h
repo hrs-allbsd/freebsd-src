@@ -1,6 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * Copyright (c) 2019 Michal Meloun <mmel@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -113,6 +114,7 @@ struct pci_dw_softc {
 	int			num_mem_ranges;
 
 	bool			coherent;
+	bool			ofw_initialized;
 	bus_dma_tag_t		dmat;
 
 	int			num_lanes;
@@ -168,5 +170,7 @@ pci_dw_dbi_rd1(device_t dev, u_int reg)
 }
 
 int pci_dw_init(device_t);
+/* Release an initialized host after deleting its unattached children. */
+void pci_dw_fini(device_t);
 
 #endif /* __PCI_HOST_GENERIC_H_ */

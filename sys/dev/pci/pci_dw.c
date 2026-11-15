@@ -1,6 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * Copyright (c) 2019 Michal Meloun <mmel@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -506,6 +507,7 @@ pci_dw_decode_ranges(struct pci_dw_softc *sc, struct ofw_pci_range *ranges,
 
 out:
 	free(sc->mem_ranges, M_DEVBUF);
+	sc->mem_ranges = NULL;
 	return (rv);
 }
 
@@ -713,6 +715,39 @@ pci_dw_get_dma_tag(device_t dev, device_t child)
 	return (sc->dmat);
 }
 
+/* The caller must stop the controller and remove its children first. */
+void
+pci_dw_fini(device_t dev)
+{
+	struct pci_dw_softc *sc;
+
+	sc = device_get_softc(dev);
+	if (sc->iatu_ur_res != NULL && sc->iatu_ur_res != sc->dbi_res)
+		bus_release_resource(dev, SYS_RES_MEMORY,
+		    rman_get_rid(sc->iatu_ur_res), sc->iatu_ur_res);
+	sc->iatu_ur_res = NULL;
+	free(sc->mem_ranges, M_DEVBUF);
+	sc->mem_ranges = NULL;
+	sc->num_mem_ranges = 0;
+	bzero(&sc->io_range, sizeof(sc->io_range));
+	if (sc->ofw_initialized) {
+		ofw_bus_destroy_iinfo(&sc->ofw_pci.sc_pci_iinfo);
+		ofw_pcib_fini(dev);
+		sc->ofw_initialized = false;
+	}
+	sc->ofw_pci.sc_initialized = 0;
+	if (sc->dmat != NULL) {
+		bus_dma_tag_destroy(sc->dmat);
+		sc->dmat = NULL;
+	}
+	if (sc->cfg_res != NULL) {
+		bus_release_resource(dev, SYS_RES_MEMORY,
+		    rman_get_rid(sc->cfg_res), sc->cfg_res);
+		sc->cfg_res = NULL;
+	}
+	mtx_destroy(&sc->mtx);
+}
+
 int
 pci_dw_init(device_t dev)
 {
@@ -810,6 +845,7 @@ pci_dw_init(device_t dev)
 	rv = ofw_pcib_init(dev);
 	if (rv != 0)
 		goto out;
+	sc->ofw_initialized = true;
 	rv = pci_dw_decode_ranges(sc, sc->ofw_pci.sc_range,
 	    sc->ofw_pci.sc_nrange);
 	if (rv != 0)
@@ -862,11 +898,14 @@ pci_dw_init(device_t dev)
 	if (rv != 0)
 		goto out;
 
-	device_add_child(dev, "pci", DEVICE_UNIT_ANY);
+	if (device_add_child(dev, "pci", DEVICE_UNIT_ANY) == NULL) {
+		rv = ENXIO;
+		goto out;
+	}
 
 	return (0);
 out:
-	/* XXX Cleanup */
+	pci_dw_fini(dev);
 	return (rv);
 }
 
