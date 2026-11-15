@@ -253,6 +253,8 @@
 			phy-mode = "rgmii-rxid";
 			clock_in_out = "output";
 			tx_delay = <0x30>;
+			/* Updated in place from public OTP ID before GMAC attach. */
+			local-mac-address = [00 00 00 00 00 00];
 			snps,mixed-burst;
 			snps,pbl = <8>;
 			phy-handle = <&phy1>;
@@ -275,6 +277,8 @@
 
 		otp_trim: otp@ffce0000 {
 			compatible = "freebsd,rk3528-r28s-otp-trim";
+			freebsd,board-identity;
+			freebsd,identity-gmac = <&gmac1>;
 			reg = <0 0xffce0000 0 0x4000>;
 			clocks = <&cru PCLK_OTPC_NS>, <&cru CLK_SBPI_OTPC_NS>,
 			    <&cru CLK_USER_OTPC_NS>;
