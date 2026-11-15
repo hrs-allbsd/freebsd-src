@@ -1328,7 +1328,7 @@ static void
 cdce_intr_write_callback(struct usb_xfer *xfer, usb_error_t error)
 {
 	struct cdce_softc *sc = usbd_xfer_softc(xfer);
-	struct usb_cdc_notification req;
+	struct usb_cdc_notification req = { 0 };
 	struct usb_page_cache *pc;
 	uint32_t speed;
 	int actlen;
@@ -1368,8 +1368,8 @@ tr_setup:
 			USETW(req.wLength, 0);
 
 			pc = usbd_xfer_get_frame(xfer, 0);
-			usbd_copy_in(pc, 0, &req, sizeof(req));
-			usbd_xfer_set_frame_len(xfer, 0, sizeof(req));
+			usbd_copy_in(pc, 0, &req, UCDC_NOTIFICATION_LENGTH);
+			usbd_xfer_set_frame_len(xfer, 0, UCDC_NOTIFICATION_LENGTH);
 			usbd_xfer_set_frames(xfer, 1);
 			usbd_transfer_submit(xfer); 
 
@@ -1391,8 +1391,8 @@ tr_setup:
 			USETDW(req.data + 4, speed); /* Downstream bit rate */
 
 			pc = usbd_xfer_get_frame(xfer, 0);
-			usbd_copy_in(pc, 0, &req, sizeof(req));
-			usbd_xfer_set_frame_len(xfer, 0, sizeof(req));
+			usbd_copy_in(pc, 0, &req, UCDC_NOTIFICATION_LENGTH + 8);
+			usbd_xfer_set_frame_len(xfer, 0, UCDC_NOTIFICATION_LENGTH + 8);
 			usbd_xfer_set_frames(xfer, 1);
 			usbd_transfer_submit(xfer); 
 		}
