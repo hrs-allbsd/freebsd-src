@@ -917,6 +917,8 @@ in6_ifdeparture(void *arg __unused, struct ifnet *ifp)
 	if (ifp->if_inet6 == NULL)
 		return;
 
+	in6_addr_event_destroy(ifp);
+
 #ifdef VIMAGE
 	/*
 	 * On VNET shutdown abort here as the stack teardown will do all

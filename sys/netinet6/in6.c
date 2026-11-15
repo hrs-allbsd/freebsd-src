@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -65,6 +66,7 @@
 
 #include <sys/param.h>
 #include <sys/eventhandler.h>
+#include <sys/taskqueue.h>
 #include <sys/errno.h>
 #include <sys/jail.h>
 #include <sys/malloc.h>
@@ -179,6 +181,148 @@ static void in6_leave_proxy_ndp_mc(struct ifnet *, const struct in6_addr *);
 
 #define ifa2ia6(ifa)	((struct in6_ifaddr *)(ifa))
 #define ia62ifa(ia6)	(&((ia6)->ia_ifa))
+
+/* Address event handlers may sleep; RA input may be inside net_epoch.
+ * Keep FIFO ADD/DEL notifications on a non-NET task, with no allocation
+ * in the receive path after the address itself has been allocated.
+ */
+struct in6_addr_event {
+	STAILQ_ENTRY(in6_addr_event) link;
+	struct in6_ifaddr *ia;
+	int event;
+	bool queued;
+};
+struct in6_addr_storage {
+	struct in6_ifaddr ia;
+	struct in6_addr_event events[2];
+};
+CTASSERT(offsetof(struct in6_addr_storage, ia) == 0);
+struct in6_addr_events {
+	struct mtx lock;
+	struct task task;
+	struct ifnet *ifp;
+	STAILQ_HEAD(, in6_addr_event) queue;
+	bool stopped;
+};
+TASKQUEUE_DEFINE_THREAD(in6_addr_event);
+static u_long in6_addr_events_queued;
+static u_long in6_addr_events_delivered;
+static u_long in6_addr_events_skipped;
+SYSCTL_DECL(_net_inet6_ip6);
+SYSCTL_ULONG(_net_inet6_ip6, OID_AUTO, addr_events_queued, CTLFLAG_RD,
+    &in6_addr_events_queued, 0, "IPv6 address notifications queued (all VNETs)");
+SYSCTL_ULONG(_net_inet6_ip6, OID_AUTO, addr_events_delivered, CTLFLAG_RD,
+    &in6_addr_events_delivered, 0, "IPv6 address notifications delivered");
+SYSCTL_ULONG(_net_inet6_ip6, OID_AUTO, addr_events_skipped, CTLFLAG_RD,
+    &in6_addr_events_skipped, 0, "Notifications skipped during interface/VNET teardown");
+
+static void
+in6_addr_event_worker(void *arg, int pending __unused)
+{
+	struct in6_addr_events *events = arg;
+	struct in6_addr_event *event;
+	struct in6_ifaddr *ia;
+	struct ifnet *ifp = events->ifp;
+	int kind;
+
+	CURVNET_SET(ifp->if_vnet);
+	mtx_lock(&events->lock);
+	while ((event = STAILQ_FIRST(&events->queue)) != NULL) {
+		STAILQ_REMOVE_HEAD(&events->queue, link);
+		ia = event->ia;
+		kind = event->event;
+		event->queued = false;
+		mtx_unlock(&events->lock);
+		KASSERT(!in_epoch(net_epoch_preempt), ("address event in net_epoch"));
+		if ((ifp->if_flags & IFF_DYING) == 0 &&
+		    !VNET_IS_SHUTTING_DOWN(ifp->if_vnet)) {
+			WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, NULL,
+			    "Invoking IPv6 network device address event may sleep");
+			EVENTHANDLER_INVOKE(ifaddr_event_ext, ifp,
+			    &ia->ia_ifa, kind);
+			atomic_add_long(&in6_addr_events_delivered, 1);
+		} else {
+			atomic_add_long(&in6_addr_events_skipped, 1);
+		}
+		ifa_free(&ia->ia_ifa);
+		if_rele(ifp);
+		mtx_lock(&events->lock);
+	}
+	mtx_unlock(&events->lock);
+	CURVNET_RESTORE();
+}
+
+/* Called before IPv6 addresses can be attached to this interface. */
+static void
+in6_addr_event_init(struct ifnet *ifp)
+{
+	struct in6_addr_events *events;
+
+	events = malloc(sizeof(*events), M_IFADDR, M_WAITOK | M_ZERO);
+	mtx_init(&events->lock, "in6 address event queue", NULL, MTX_DEF);
+	TASK_INIT(&events->task, 0, in6_addr_event_worker, events);
+	STAILQ_INIT(&events->queue);
+	events->ifp = ifp;
+	ifp->if_inet6->addr_events = events;
+}
+
+static void
+in6_addr_event_notify(struct ifnet *ifp, struct in6_ifaddr *ia, int kind)
+{
+	struct in6_addr_storage *storage = (struct in6_addr_storage *)ia;
+	struct in6_addr_events *events = ifp->if_inet6->addr_events;
+	struct in6_addr_event *event;
+
+	KASSERT(kind == IFADDR_EVENT_ADD || kind == IFADDR_EVENT_DEL,
+	    ("invalid address event"));
+	event = &storage->events[kind == IFADDR_EVENT_ADD ? 0 : 1];
+	mtx_lock(&events->lock);
+	/* Repeated updates to an address already waiting for ADD notification
+	 * are represented by that pending notification of its current state.
+	 */
+	if (!events->stopped && !VNET_IS_SHUTTING_DOWN(ifp->if_vnet) &&
+	    !event->queued) {
+		event->queued = true;
+		event->ia = ia;
+		event->event = kind;
+		ifa_ref(&ia->ia_ifa);
+		if_ref(ifp);
+		STAILQ_INSERT_TAIL(&events->queue, event, link);
+		atomic_add_long(&in6_addr_events_queued, 1);
+		taskqueue_enqueue(taskqueue_in6_addr_event, &events->task);
+	}
+	mtx_unlock(&events->lock);
+}
+
+/* ifnet departure runs outside net_epoch, before protocol state is freed. */
+void
+in6_addr_event_destroy(struct ifnet *ifp)
+{
+	struct in6_addr_events *events = ifp->if_inet6->addr_events;
+
+	mtx_lock(&events->lock);
+	events->stopped = true;
+	mtx_unlock(&events->lock);
+	taskqueue_drain(taskqueue_in6_addr_event, &events->task);
+	KASSERT(STAILQ_EMPTY(&events->queue), ("pending IPv6 address events"));
+	mtx_destroy(&events->lock);
+	free(events, M_IFADDR);
+	ifp->if_inet6->addr_events = NULL;
+}
+
+#ifdef VIMAGE
+static void
+in6_addr_event_vnet_drain(const void *unused __unused)
+{
+	/* Drain receive-side work before interface return and protocol teardown.
+	 * Producers are refused once teardown passes SI_SUB_VNET_DONE.
+	 */
+	NET_EPOCH_WAIT();
+	taskqueue_drain_all(taskqueue_in6_addr_event);
+}
+VNET_SYSUNINIT(in6_addr_event_vnet_drain, SI_SUB_VNET_DONE, SI_ORDER_LAST,
+    in6_addr_event_vnet_drain, NULL);
+#endif
 
 static struct sx in6_control_sx;
 SX_SYSINIT(in6_control_sx, &in6_control_sx, "in6_control");
@@ -581,8 +725,7 @@ in6_control_ioctl(u_long cmd, void *data,
 
 	case SIOCDIFADDR_IN6:
 		in6_purgeifaddr(ia);
-		EVENTHANDLER_INVOKE(ifaddr_event_ext, ifp, &ia->ia_ifa,
-		    IFADDR_EVENT_DEL);
+		in6_addr_event_notify(ifp, ia, IFADDR_EVENT_DEL);
 		break;
 
 	default:
@@ -982,7 +1125,7 @@ in6_alloc_ifa(struct ifnet *ifp, struct in6_aliasreq *ifra, int flags)
 	 * RA, it is called under an interrupt context.  So, we should
 	 * call malloc with M_NOWAIT.
 	 */
-	ia = (struct in6_ifaddr *)ifa_alloc(sizeof(*ia), M_NOWAIT);
+	ia = (struct in6_ifaddr *)ifa_alloc(sizeof(struct in6_addr_storage), M_NOWAIT);
 	if (ia == NULL)
 		return (NULL);
 	LIST_INIT(&ia->ia6_memberships);
@@ -1618,13 +1761,7 @@ in6_notify_ifa(struct ifnet *ifp, struct in6_ifaddr *ia,
 			ia->ia_flags |= IFA_RTSELF;
 	}
 done:
-	WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, NULL,
-	    "Invoking IPv6 network device address event may sleep");
-
-	ifa_ref(&ia->ia_ifa);
-	EVENTHANDLER_INVOKE(ifaddr_event_ext, ifp, &ia->ia_ifa,
-	    IFADDR_EVENT_ADD);
-	ifa_free(&ia->ia_ifa);
+	in6_addr_event_notify(ifp, ia, IFADDR_EVENT_ADD);
 
 	return (error);
 }
@@ -2609,6 +2746,7 @@ in6_ifarrival(void *arg __unused, struct ifnet *ifp)
 		return;
 	}
 	ext = ifp->if_inet6 = malloc(sizeof(*ext), M_IFADDR, M_WAITOK | M_ZERO);
+	in6_addr_event_init(ifp);
 	COUNTER_ARRAY_ALLOC(ext->in6_ifstat,
 	    sizeof(struct in6_ifstat) / sizeof(uint64_t), M_WAITOK);
 	COUNTER_ARRAY_ALLOC(ext->icmp6_ifstat,

@@ -495,6 +495,7 @@ struct	in6_rrenumreq {
 /*
  * Structure pointed at by ifp->if_inet6.
  */
+struct in6_addr_events;
 struct in6_ifextra {
 	counter_u64_t in6_ifstat[sizeof(struct in6_ifstat) / sizeof(uint64_t)];
 	counter_u64_t icmp6_ifstat[sizeof(struct icmp6_ifstat) /
@@ -538,6 +539,7 @@ struct in6_ifextra {
 	struct lltable *lltable;
 
 	struct epoch_context	epoch_ctx;
+	struct in6_addr_events *addr_events;
 };
 
 #define	LLTABLE6(ifp)	((ifp)->if_inet6->lltable)
@@ -903,6 +905,7 @@ void	in6_prepare_ifra(struct in6_aliasreq *, const struct in6_addr *,
 int	in6_addifaddr(struct ifnet *, struct in6_aliasreq *, struct in6_ifaddr *);
 void	in6_purgeaddr(struct ifaddr *);
 void	in6_purgeifaddr(struct in6_ifaddr *);
+void	in6_addr_event_destroy(struct ifnet *);
 int	in6if_do_dad(struct ifnet *);
 void	in6_savemkludge(struct in6_ifaddr *);
 uint32_t in6_ifmtu(const struct ifnet *);
