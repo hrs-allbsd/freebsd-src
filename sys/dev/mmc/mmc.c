@@ -2037,24 +2037,26 @@ mmc_go_discovery(struct mmc_softc *sc)
 	uint32_t ocr;
 	device_t dev;
 	int err;
+	bool no_sd;
 
 	dev = sc->dev;
+	no_sd = device_has_property(device_get_parent(dev), "no-sd");
 	if (mmcbr_get_power_mode(dev) != power_on) {
 		/*
 		 * First, try SD modes
 		 */
 		sc->squelched++; /* Errors are expected, squelch reporting. */
-		mmcbr_set_mode(dev, mode_sd);
+		mmcbr_set_mode(dev, no_sd ? mode_mmc : mode_sd);
 		mmc_power_up(sc);
 		mmcbr_set_bus_mode(dev, pushpull);
 		if (bootverbose || mmc_debug)
 			device_printf(sc->dev, "Probing bus\n");
 		mmc_idle_cards(sc);
-		err = mmc_send_if_cond(sc, 1);
+		err = no_sd ? MMC_ERR_INVALID : mmc_send_if_cond(sc, 1);
 		if ((bootverbose || mmc_debug) && err == 0)
 			device_printf(sc->dev,
 			    "SD 2.0 interface conditions: OK\n");
-		if (mmc_send_app_op_cond(sc, 0, &ocr) != MMC_ERR_NONE) {
+		if (no_sd || mmc_send_app_op_cond(sc, 0, &ocr) != MMC_ERR_NONE) {
 			if (bootverbose || mmc_debug)
 				device_printf(sc->dev, "SD probe: failed\n");
 			/*

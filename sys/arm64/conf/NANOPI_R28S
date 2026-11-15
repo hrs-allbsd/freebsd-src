@@ -14,3 +14,6 @@ device rk3528_otp_trim
 device rk3528_wdt
 device rk3528_usb2phy
 device rkcrypto
+
+# Populated eMMC through the standard MMC/GEOM stack.
+device rk3528_sdhci

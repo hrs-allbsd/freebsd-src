@@ -220,6 +220,16 @@
 			drive-strength = <2>;
 		};
 
+		emmc_pins: emmc-pins {
+			/* GPIO1_C4..D3 data, D4 CMD, D5 CLK, D7 strobe. */
+			rockchip,pins = <1 20 1 &pull_up>, <1 21 1 &pull_up>,
+			    <1 22 1 &pull_up>, <1 23 1 &pull_up>,
+			    <1 24 1 &pull_up>, <1 25 1 &pull_up>,
+			    <1 26 1 &pull_up>, <1 27 1 &pull_up>,
+			    <1 28 1 &pull_up>, <1 29 1 &pull_none>,
+			    <1 31 1 &pull_none>;
+		};
+
 		sd_pins: sd-pins {
 			rockchip,pins = <2 0 1 &pull_up_drv2>,
 			    <2 1 1 &pull_up_drv2>, <2 2 1 &pull_up_drv2>,
@@ -355,11 +365,37 @@
 		};
 
 		cru: clock-controller@ff4a0000 {
-			/* Existing CRU mode also permits the crypto reset, index 58. */
-			compatible = "freebsd,rk3528-r28s-usb-cru";
+			/* eMMC mode retains existing clocks and the crypto reset. */
+			compatible = "freebsd,rk3528-r28s-emmc-cru";
 			reg = <0 0xff4a0000 0 0x21000>;
 			#clock-cells = <1>;
 			#reset-cells = <1>;
+		};
+
+		emmc: mmc@ffbf0000 {
+			compatible = "rockchip,rk3528-dwcmshc";
+			reg = <0 0xffbf0000 0 0x10000>;
+			interrupts = <0 136 4>;
+			clocks = <&cru CCLK_SRC_EMMC>, <&cru HCLK_EMMC>,
+			    <&cru ACLK_EMMC>, <&cru BCLK_EMMC>, <&cru TCLK_EMMC>;
+			clock-names = "core", "bus", "axi", "block", "timer";
+			resets = <&cru 415>, <&cru 416>, <&cru 417>,
+			    <&cru 418>, <&cru 419>;
+			reset-names = "core", "bus", "axi", "block", "timer";
+			pinctrl-names = "default";
+			pinctrl-0 = <&emmc_pins>;
+			rockchip,ioc = <&ioc>;
+			/* Fixed VCC=3.3V and VCCQ=1.8V; no rail switching. */
+			bus-width = <8>;
+			max-frequency = <49500000>;
+			freebsd,use-sdma;
+			freebsd,use-hs-sdr;
+			freebsd,use-ddr52;
+			no-sd;
+			no-sdio;
+			non-removable;
+			disable-wp;
+			status = "okay";
 		};
 
 		sdmmc: mmc@ffc30000 {
