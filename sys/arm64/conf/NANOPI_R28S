@@ -17,3 +17,6 @@ device rkcrypto
 
 # Populated eMMC through the standard MMC/GEOM stack.
 device rk3528_sdhci
+
+# Onboard RTL8111H: qualified automatic FIFO sizing.
+envvar hw.re.rtl8168h_auto_fifo=1

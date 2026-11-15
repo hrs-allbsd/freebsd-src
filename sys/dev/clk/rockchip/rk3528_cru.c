@@ -82,8 +82,12 @@ static struct rk_clk_pll_def ppll = {
 	    .parent_names = pll_parent, .parent_cnt = nitems(pll_parent) },
 	.base_offset = 0x20080,
 };
+PLIST(pcie_ref_parents) = { "clk_ppll_100m_src", "xin24m" };
 static struct rk_clk rk3528_net_clks[] = {
 	{ .type = RK3328_CLK_PLL, .clk.pll = &ppll },
+	CDIV(0, "ppll_100m_div", "ppll", 0, 0x8001, 2, 5),
+	MUX(CLK_REF_PCIE_INNER_PHY, "pcie_refclk", pcie_ref_parents,
+	    0, 0x8001, 13, 1),
 	CDIV(0, "clk_50m_div", "cpll", 0, 0, 2, 5),
 	CDIV(0, "clk_200m_div", "gpll", 0, 1, 5, 5),
 	MUX(0, "pclk_vpu_mux", pclk_parents, 0, 61, 4, 2),
@@ -94,6 +98,16 @@ static struct rk_clk rk3528_net_clks[] = {
 	MUX(0, "pclk_rkvenc_mux", pclk_parents, 0, 79, 4, 2),
 };
 static struct rk_cru_gate rk3528_net_gates[] = {
+	GATE(CLK_PPLL_100M_MATRIX, "clk_ppll_100m_src", "ppll_100m_div",
+	    0x8000, 1),
+	GATE(PCLK_CRU_PCIE, "pclk_cru_pcie", "pclk_vpu_root", 25, 11),
+	GATE(CLK_PCIE_AUX, "clk_pcie_aux", "xin24m", 30, 2),
+	GATE(PCLK_PCIE, "pclk_pcie", "pclk_vpu_root", 30, 1),
+	GATE(ACLK_PCIE, "aclk_pcie", "aclk_vpu_l_root", 30, 3),
+	GATE(HCLK_PCIE_SLV, "hclk_pcie_slv", "hclk_vpu_root", 30, 4),
+	GATE(HCLK_PCIE_DBI, "hclk_pcie_dbi", "hclk_vpu_root", 30, 5),
+	GATE(PCLK_PCIE_PHY, "pclk_pcie_phy", "pclk_vpu_root", 30, 6),
+	GATE(PCLK_PIPE_GRF, "pclk_pipe_grf", "pclk_vpu_root", 30, 7),
 	GATE(CLK_MATRIX_50M_SRC, "clk_50m_src", "clk_50m_div", 0, 1),
 	GATE(CLK_MATRIX_200M_SRC, "clk_200m_src", "clk_200m_div", 0, 4),
 	GATE(PCLK_VPU_ROOT, "pclk_vpu_root", "pclk_vpu_mux", 25, 5),
@@ -226,7 +240,8 @@ rk3528_reset_valid(struct rk_cru_softc *sc, intptr_t id)
 		return (true);
 	if (sc->type >= 1 && id == 453)
 		return (true);
-	return (false);
+	return (sc->type >= 2 && (id == 481 || id == 482 ||
+	    id == 483 || id == 486));
 }
 
 static int

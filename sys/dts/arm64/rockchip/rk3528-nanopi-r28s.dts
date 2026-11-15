@@ -211,6 +211,10 @@
 			    <3 8 2 &pull_none_drv2>, <3 13 2 &pull_none_drv2>;
 		};
 
+		pcie_reset_pin: pcie-reset-pin {
+			rockchip,pins = <4 16 0 &pull_none>;
+		};
+
 		gmac_reset_pin: gmac-reset-pin {
 			rockchip,pins = <4 18 0 &pull_none>;
 		};
@@ -370,6 +374,43 @@
 			reg = <0 0xff4a0000 0 0x21000>;
 			#clock-cells = <1>;
 			#reset-cells = <1>;
+		};
+
+		pcie: pcie@fe000000 {
+			compatible = "freebsd,rk3528-r28s-pcie";
+			device_type = "pci";
+			#address-cells = <3>;
+			#size-cells = <2>;
+			#interrupt-cells = <1>;
+			reg = <0 0xfe000000 0 0x400000>,
+			    <0 0xfe4f0000 0 0x10000>,
+			    <0 0xfc000000 0 0x100000>,
+			    <0 0xffdc0000 0 0x1000>;
+			reg-names = "dbi", "apb", "config", "phy";
+			rockchip,grf = <&grf>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&pcie_reset_pin>;
+			reset-gpios = <&gpio4 16 GPIO_ACTIVE_LOW>;
+			bus-range = <0 255>;
+			num-lanes = <1>;
+			ranges = <0x81000000 0 0xfc100000 0 0xfc100000 0 0x100000>,
+			    <0x82000000 0 0xfc200000 0 0xfc200000 0 0x1e00000>;
+			/* One soldered endpoint on INTA; no MSI provider. */
+			interrupt-map-mask = <0 0 0 7>;
+			interrupt-map = <0 0 0 1 &gic 0 155 4>;
+			clocks = <&cru PCLK_GPIO4>, <&cru ACLK_PCIE>,
+			    <&cru HCLK_PCIE_SLV>, <&cru HCLK_PCIE_DBI>,
+			    <&cru PCLK_CRU_PCIE>, <&cru CLK_PCIE_AUX>,
+			    <&cru PCLK_PCIE>, <&cru PCLK_PCIE_PHY>,
+			    <&cru PCLK_PIPE_GRF>, <&cru CLK_REF_PCIE_INNER_PHY>;
+			clock-names = "gpio", "aclk", "hclk_slv", "hclk_dbi",
+			    "pclk_cru", "aux", "pclk", "phy_apb", "pipe_grf", "refclk";
+			assigned-clocks = <&cru CLK_REF_PCIE_INNER_PHY>;
+			assigned-clock-parents = <&cru CLK_PPLL_100M_MATRIX>;
+			resets = <&cru 481>, <&cru 483>, <&cru 486>, <&cru 482>;
+			reset-names = "periph", "power_up", "phy_apb", "phy";
+			/* The shared Naneng lane is dedicated to the RTL8111H. */
+			status = "okay";
 		};
 
 		emmc: mmc@ffbf0000 {

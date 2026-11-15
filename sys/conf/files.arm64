@@ -820,6 +820,7 @@ dev/qcom_tlmm/qcom_tlmm_ipq4018_hw.c		optional qcom_tlmm gpio
 arm64/rockchip/rk3328_codec.c			optional fdt rk3328codec soc_rockchip_rk3328
 arm64/rockchip/rk3399_emmcphy.c			optional fdt rk_emmcphy soc_rockchip_rk3399
 arm64/rockchip/rk3568_combphy.c			optional fdt rk_combphy soc_rockchip_rk3568
+arm64/rockchip/rk3528_pcie.c	optional fdt pci soc_rockchip_rk3528
 arm64/rockchip/rk3568_pcie.c			optional fdt pci soc_rockchip_rk3568
 arm64/rockchip/rk3568_pciephy.c			optional fdt pci soc_rockchip_rk3568
 arm64/rockchip/rk_i2s.c				optional fdt sound soc_rockchip_rk3328 | fdt sound soc_rockchip_rk3399
