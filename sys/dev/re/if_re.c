@@ -172,6 +172,12 @@ TUNABLE_INT("hw.re.prefer_iomap", &prefer_iomap);
 static int aspm_disable = 1;
 TUNABLE_INT("hw.re.aspm_disable", &aspm_disable);
 
+/* RTL8168H automatic FIFO sizing, selected by qualified board configs. */
+static int rtl8168h_auto_fifo;
+TUNABLE_INT("hw.re.rtl8168h_auto_fifo", &rtl8168h_auto_fifo);
+
+#define RE_TXCFG_AUTO_FIFO	0x00000080U
+
 #define RE_CSUM_FEATURES    (CSUM_IP | CSUM_TCP | CSUM_UDP)
 
 /*
@@ -3358,8 +3364,14 @@ re_init_locked(struct rl_softc *sc)
 		else
 			CSR_WRITE_4(sc, RL_TXCFG,
 			    RL_TXCFG_CONFIG|RL_LOOPTEST_ON_CPLUS);
-	} else
-		CSR_WRITE_4(sc, RL_TXCFG, RL_TXCFG_CONFIG);
+	} else {
+		uint32_t txcfg;
+
+		txcfg = RL_TXCFG_CONFIG;
+		if (re_is_8168h(sc) && rtl8168h_auto_fifo != 0)
+			txcfg |= RE_TXCFG_AUTO_FIFO;
+		CSR_WRITE_4(sc, RL_TXCFG, txcfg);
+	}
 
 	CSR_WRITE_1(sc, RL_EARLY_TX_THRESH, 16);
 
