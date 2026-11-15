@@ -68,6 +68,7 @@ struct dwmmc_softc {
 	uint32_t		use_pio;
 	bool			desc_map_loaded;
 	bool			dma_map_loaded;
+	bool			dma_active;
 	bool			dma_seen_done;
 	bool			idmac_guard, dma_fault;
 	struct callout		dma_deadline;

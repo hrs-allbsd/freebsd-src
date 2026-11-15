@@ -408,6 +408,18 @@ dwmmc_tasklet(struct dwmmc_softc *sc)
 	cmd = sc->curcmd;
 	KASSERT(cmd != NULL, ("%s: sc %p curcmd %p == NULL", __func__, sc, cmd));
 
+	if (sc->idmac_guard && sc->dma_active) {
+		if (cmd->error == MMC_ERR_NONE &&
+		    !dwmmc_idmac_ready(sc->cmd_done, sc->dto_rcvd,
+		    sc->dma_seen_done, sc->use_auto_stop &&
+		    (cmd->opcode == MMC_READ_MULTIPLE_BLOCK ||
+		    cmd->opcode == MMC_WRITE_MULTIPLE_BLOCK), sc->acd_rcvd))
+			return;
+		if (dma_done(sc, cmd) != 0)
+			return; /* Failed reset: retain request and DMA mapping. */
+	}
+	if (sc->idmac_guard && cmd->error != MMC_ERR_NONE)
+		sc->cmd_done = 1;
 	if (!sc->use_pio && cmd->data != NULL &&
 	    sc->dma_map_loaded) {
 		if (cmd->error == MMC_ERR_NONE &&
@@ -428,7 +440,8 @@ dwmmc_tasklet(struct dwmmc_softc *sc)
 	if (cmd->error != MMC_ERR_NONE || !cmd->data) {
 		dwmmc_next_operation(sc);
 
-	} else if (cmd->data && sc->dto_rcvd) {
+	} else if (cmd->data && sc->dto_rcvd &&
+	    (sc->use_pio || !sc->dma_active)) {
 		if ((cmd->opcode == MMC_WRITE_MULTIPLE_BLOCK ||
 		     cmd->opcode == MMC_READ_MULTIPLE_BLOCK) &&
 		     sc->use_auto_stop) {
@@ -1143,6 +1156,7 @@ dma_done(struct dwmmc_softc *sc, struct mmc_command *cmd)
 		}
 	}
 
+	sc->dma_active = false;
 	if (cmd->error == MMC_ERR_NONE)
 		sc->dma_completed++;
 	else
@@ -1221,6 +1235,7 @@ dma_prepare(struct dwmmc_softc *sc, struct mmc_command *cmd)
 		WRITE4(sc, SDMMC_IDINTEN, SDMMC_IDINTEN_MASK);
 	}
 
+	sc->dma_active = true;
 	sc->dma_started++;
 	if (data->flags & MMC_DATA_WRITE)
 		sc->dma_write_bytes += data->len;
