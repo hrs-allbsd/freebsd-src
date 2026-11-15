@@ -4,7 +4,7 @@
  *
  * Base board description: memory, CPUs, interrupt controller and console.
  * UART0 clock, pinmux and reset state are inherited from the boot firmware.
- * SD pinmux and its always-on 3.3 V supply are inherited from the firmware.
+ * The SD card uses the firmware-enabled, always-on 3.3 V supply.
  */
 
 /dts-v1/;
@@ -111,11 +111,33 @@
 		status = "okay";
 	};
 
+	pinctrl: pinctrl {
+		compatible = "rockchip,rk3528-pinctrl";
+		rockchip,grf = <&ioc>;
+
+		pull_up_drv2: pull-up-drv2 {
+			bias-pull-up;
+			drive-strength = <2>;
+		};
+
+		sd_pins: sd-pins {
+			rockchip,pins = <2 0 1 &pull_up_drv2>,
+			    <2 1 1 &pull_up_drv2>, <2 2 1 &pull_up_drv2>,
+			    <2 3 1 &pull_up_drv2>, <2 4 1 &pull_up_drv2>,
+			    <2 5 1 &pull_up_drv2>;
+		};
+	};
+
 	soc {
 		compatible = "simple-bus";
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
+
+		ioc: syscon@ff540000 {
+			compatible = "rockchip,rk3528-ioc-grf", "syscon";
+			reg = <0 0xff540000 0 0x40000>;
+		};
 
 		cru: clock-controller@ff4a0000 {
 			compatible = "freebsd,rk3528-sdmmc-cru";
@@ -130,6 +152,8 @@
 			interrupts = <0 133 4>;
 			clocks = <&cru HCLK_SDMMC0>, <&cru CCLK_SRC_SDMMC0>;
 			clock-names = "biu", "ciu";
+			pinctrl-names = "default";
+			pinctrl-0 = <&sd_pins>;
 			fifo-depth = <256>;
 			bus-width = <4>;
 			max-frequency = <25000000>;
