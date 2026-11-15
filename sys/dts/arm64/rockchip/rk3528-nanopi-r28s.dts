@@ -10,6 +10,7 @@
 /dts-v1/;
 
 #include <dt-bindings/clock/rockchip,rk3528-cru.h>
+#include <dt-bindings/gpio/gpio.h>
 
 / {
 	model = "FriendlyElec NanoPi R28S";
@@ -116,6 +117,28 @@
 		status = "okay";
 	};
 
+	leds {
+		compatible = "gpio-leds";
+		pinctrl-names = "default";
+		pinctrl-0 = <&led_pins>;
+
+		sys-led {
+			label = "sys_led";
+			gpios = <&gpio4 8 GPIO_ACTIVE_HIGH>;
+			default-state = "on";
+		};
+		led1 {
+			label = "led1";
+			gpios = <&gpio4 9 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+		};
+		led2 {
+			label = "led2";
+			gpios = <&gpio4 11 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+		};
+	};
+
 	pinctrl: pinctrl {
 		compatible = "rockchip,rk3528-pinctrl";
 		rockchip,grf = <&ioc>;
@@ -133,6 +156,15 @@
 			gpio-ranges = <&pinctrl 0 128 32>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
+		};
+
+		pull_none: pull-none {
+			bias-disable;
+		};
+
+		led_pins: led-pins {
+			rockchip,pins = <4 8 0 &pull_none>,
+			    <4 9 0 &pull_none>, <4 11 0 &pull_none>;
 		};
 
 		pull_up: pull-up {
