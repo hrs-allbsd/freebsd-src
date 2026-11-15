@@ -119,6 +119,21 @@
 	pinctrl: pinctrl {
 		compatible = "rockchip,rk3528-pinctrl";
 		rockchip,grf = <&ioc>;
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		gpio4: gpio@ffb20000 {
+			compatible = "rockchip,gpio-bank";
+			reg = <0 0xffb20000 0 0x200>;
+			interrupts = <0 78 4>;
+			clocks = <&cru PCLK_GPIO4>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			gpio-ranges = <&pinctrl 0 128 32>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
 
 		pull_up: pull-up {
 			bias-pull-up;
