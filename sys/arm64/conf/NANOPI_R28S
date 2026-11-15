@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
+# GENERIC-based configuration; supply the board DTB through the boot loader.
+include GENERIC
+ident NANOPI_R28S
+
+options SOC_ROCKCHIP_RK3528
+
+device hym8563
+device gpiokeys
+device rkrng
+device rk3528_tsadc
+device rk3528_otp_trim
+device rk3528_wdt
+device rk3528_usb2phy
+device rkcrypto
