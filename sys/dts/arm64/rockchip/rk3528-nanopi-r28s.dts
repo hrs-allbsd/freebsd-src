@@ -273,13 +273,46 @@
 			};
 		};
 
+		otp_trim: otp@ffce0000 {
+			compatible = "freebsd,rk3528-r28s-otp-trim";
+			reg = <0 0xffce0000 0 0x4000>;
+			clocks = <&cru PCLK_OTPC_NS>, <&cru CLK_SBPI_OTPC_NS>,
+			    <&cru CLK_USER_OTPC_NS>;
+			clock-names = "apb", "sbpi", "usr";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			tsadc_trim_l: trim-l@44 {
+				reg = <0x44 1>;
+			};
+			tsadc_trim_h: trim-h@45 {
+				reg = <0x45 1>;
+			};
+		};
+
+		tsadc: tsadc@ffad0000 {
+			compatible = "freebsd,rk3528-r28s-tsadc";
+			reg = <0 0xffad0000 0 0x400>;
+			rockchip,grf = <&grf>;
+			clocks = <&cru PCLK_TSADC>, <&cru CLK_TSADC>,
+			    <&cru CLK_TSADC_TSEN>;
+			clock-names = "apb_pclk", "tsadc", "tsadc_tsen";
+			resets = <&cru 526>, <&cru 527>;
+			nvmem-cells = <&tsadc_trim_l>, <&tsadc_trim_h>;
+			nvmem-cell-names = "trim_l", "trim_h";
+			freebsd,require-otp-trim;
+			rockchip,hw-tshut-temp = <120000>;
+			rockchip,hw-tshut-mode = <0>;
+			rockchip,hw-tshut-polarity = <0>;
+		};
+
 		ioc: syscon@ff540000 {
 			compatible = "rockchip,rk3528-ioc-grf", "syscon";
 			reg = <0 0xff540000 0 0x40000>;
 		};
 
 		cru: clock-controller@ff4a0000 {
-			compatible = "freebsd,rk3528-r28s-uart-cru";
+			compatible = "freebsd,rk3528-r28s-trim-cru";
 			reg = <0 0xff4a0000 0 0x21000>;
 			#clock-cells = <1>;
 			#reset-cells = <1>;
