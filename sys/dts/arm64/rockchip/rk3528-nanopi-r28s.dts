@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  *
  * Base board description: memory, CPUs, interrupt controller and console.
- * UART0 clock, pinmux and reset state are inherited from the boot firmware.
+ * UART0 retains a 24 MHz early-console clock and firmware reset state.
  * The SD card uses the firmware-enabled, always-on 3.3 V supply.
  */
 
@@ -104,6 +104,11 @@
 		compatible = "snps,dw-apb-uart";
 		reg = <0 0xff9f0000 0 0x100>;
 		interrupts = <0 40 4>;
+		clocks = <&cru SCLK_UART0>, <&cru PCLK_UART0>;
+		clock-names = "baudclk", "apb_pclk";
+		pinctrl-names = "default";
+		pinctrl-0 = <&uart0_pins>;
+		/* Early console runs before the clock provider attaches. */
 		clock-frequency = <24000000>;
 		reg-shift = <2>;
 		reg-io-width = <4>;
@@ -114,6 +119,15 @@
 	pinctrl: pinctrl {
 		compatible = "rockchip,rk3528-pinctrl";
 		rockchip,grf = <&ioc>;
+
+		pull_up: pull-up {
+			bias-pull-up;
+		};
+
+		uart0_pins: uart0-pins {
+			/* DEBUG connector: GPIO4_C7 RX, GPIO4_D0 TX, mux 1. */
+			rockchip,pins = <4 23 1 &pull_up>, <4 24 1 &pull_up>;
+		};
 
 		pull_up_drv2: pull-up-drv2 {
 			bias-pull-up;
@@ -140,8 +154,8 @@
 		};
 
 		cru: clock-controller@ff4a0000 {
-			compatible = "freebsd,rk3528-sdmmc-cru";
-			reg = <0 0xff4a0000 0 0x1000>;
+			compatible = "freebsd,rk3528-r28s-uart-cru";
+			reg = <0 0xff4a0000 0 0x21000>;
 			#clock-cells = <1>;
 		};
 
