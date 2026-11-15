@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: BSD-2-Clause
+/*
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
+ *
+ * Base board description: memory, CPUs, interrupt controller and console.
+ * UART0 clock, pinmux and reset state are inherited from the boot firmware.
+ * Peripheral nodes are added separately from experimental bring-up profiles.
+ */
+
+/dts-v1/;
+
+/ {
+	model = "FriendlyElec NanoPi R28S";
+	compatible = "friendlyelec,nanopi-r28s", "rockchip,rk3528";
+	#address-cells = <2>;
+	#size-cells = <2>;
+	interrupt-parent = <&gic>;
+
+	aliases {
+		serial0 = &uart0;
+	};
+
+	chosen {
+		stdout-path = "serial0:1500000n8";
+	};
+
+	/* Exclude firmware below 2 MiB and the secure 0x08400000..0x08bfffff. */
+	memory@200000 {
+		device_type = "memory";
+		reg = <0 0x00200000 0 0x08200000>,
+		      <0 0x08c00000 0 0x37400000>;
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a53";
+			reg = <0>;
+			enable-method = "psci";
+		};
+		cpu1: cpu@1 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a53";
+			reg = <1>;
+			enable-method = "psci";
+		};
+		cpu2: cpu@2 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a53";
+			reg = <2>;
+			enable-method = "psci";
+		};
+		cpu3: cpu@3 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a53";
+			reg = <3>;
+			enable-method = "psci";
+		};
+		cpu-map {
+			cluster0 {
+				core0 { cpu = <&cpu0>; };
+				core1 { cpu = <&cpu1>; };
+				core2 { cpu = <&cpu2>; };
+				core3 { cpu = <&cpu3>; };
+			};
+		};
+	};
+
+	/* Cortex-A53 per-core PMU SPIs, as in the vendor board DT. */
+	pmu {
+		compatible = "arm,cortex-a53-pmu";
+		interrupts = <0 171 4>, <0 172 4>, <0 173 4>, <0 174 4>;
+		interrupt-affinity = <&cpu0>, <&cpu1>, <&cpu2>, <&cpu3>;
+	};
+
+	psci {
+		compatible = "arm,psci-1.0", "arm,psci-0.2";
+		method = "smc";
+	};
+
+	timer {
+		compatible = "arm,armv8-timer";
+		interrupts = <1 13 0xf08>, <1 14 0xf08>,
+		             <1 11 0xf08>, <1 10 0xf08>;
+	};
+
+	gic: interrupt-controller@fed01000 {
+		compatible = "arm,gic-400";
+		#interrupt-cells = <3>;
+		#address-cells = <0>;
+		interrupt-controller;
+		reg = <0 0xfed01000 0 0x1000>,
+		      <0 0xfed02000 0 0x2000>,
+		      <0 0xfed04000 0 0x2000>,
+		      <0 0xfed06000 0 0x2000>;
+		interrupts = <1 9 0xf08>;
+	};
+
+	uart0: serial@ff9f0000 {
+		compatible = "snps,dw-apb-uart";
+		reg = <0 0xff9f0000 0 0x100>;
+		interrupts = <0 40 4>;
+		clock-frequency = <24000000>;
+		reg-shift = <2>;
+		reg-io-width = <4>;
+		current-speed = <1500000>;
+		status = "okay";
+	};
+};
