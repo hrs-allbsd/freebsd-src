@@ -318,13 +318,45 @@
 			resets = <&cru 159>, <&cru 160>;
 		};
 
+		/* Firmware SCMI mailbox lies below the usable RAM banks. */
+		scmi_shmem: scmi-shmem@10f000 {
+			compatible = "arm,scmi-shmem";
+			reg = <0 0x0010f000 0 0x100>;
+		};
+
+		scmi {
+			compatible = "arm,scmi-smc";
+			shmem = <&scmi_shmem>;
+			arm,smc-id = <0x82000010>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			scmi_clocks: protocol@14 {
+				reg = <0x14>;
+				#clock-cells = <1>;
+			};
+		};
+
+		crypto@ffc40000 {
+			compatible = "rockchip,crypto-v4";
+			reg = <0 0xffc40000 0 0x2000>;
+			interrupts = <0 19 4>;
+			clocks = <&scmi_clocks SCMI_ACLK_CRYPTO>,
+			    <&scmi_clocks SCMI_HCLK_CRYPTO>,
+			    <&scmi_clocks SCMI_CORE_CRYPTO>;
+			clock-names = "aclk", "hclk", "sclk";
+			resets = <&cru 58>;
+			reset-names = "crypto-rst";
+		};
+
 		ioc: syscon@ff540000 {
 			compatible = "rockchip,rk3528-ioc-grf", "syscon";
 			reg = <0 0xff540000 0 0x40000>;
 		};
 
 		cru: clock-controller@ff4a0000 {
-			compatible = "freebsd,rk3528-r28s-watchdog-cru";
+			/* Existing CRU mode also permits the crypto reset, index 58. */
+			compatible = "freebsd,rk3528-r28s-usb-cru";
 			reg = <0 0xff4a0000 0 0x21000>;
 			#clock-cells = <1>;
 			#reset-cells = <1>;
