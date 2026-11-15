@@ -1052,6 +1052,12 @@ cdce_init(struct usb_ether *ue)
 
 	if_setdrvflagbits(ifp, IFF_DRV_RUNNING, 0);
 
+	/* Restart the device notification sequence on every interface init. */
+	if (usbd_get_mode(sc->sc_ue.ue_udev) == USB_MODE_DEVICE) {
+		usbd_transfer_stop(sc->sc_xfer[CDCE_INTR_TX]);
+		sc->sc_notify_link = 1;
+		sc->sc_notify_state = CDCE_NOTIFY_NETWORK_CONNECTION;
+	}
 	/* start interrupt transfer */
 	usbd_transfer_start(sc->sc_xfer[CDCE_INTR_RX]);
 	usbd_transfer_start(sc->sc_xfer[CDCE_INTR_TX]);
@@ -1094,6 +1100,12 @@ cdce_stop(struct usb_ether *ue)
 	usbd_transfer_stop(sc->sc_xfer[CDCE_BULK_TX]);
 	usbd_transfer_stop(sc->sc_xfer[CDCE_INTR_RX]);
 	usbd_transfer_stop(sc->sc_xfer[CDCE_INTR_TX]);
+	if (usbd_get_mode(sc->sc_ue.ue_udev) == USB_MODE_DEVICE) {
+		/* The control interface can report link down while data is stopped. */
+		sc->sc_notify_link = 0;
+		sc->sc_notify_state = CDCE_NOTIFY_NETWORK_CONNECTION;
+		usbd_transfer_start(sc->sc_xfer[CDCE_INTR_TX]);
+	}
 }
 
 static void
@@ -1342,7 +1354,8 @@ cdce_intr_write_callback(struct usb_xfer *xfer, usb_error_t error)
 
 		switch (sc->sc_notify_state) {
 		case CDCE_NOTIFY_NETWORK_CONNECTION:
-			sc->sc_notify_state = CDCE_NOTIFY_SPEED_CHANGE;
+			sc->sc_notify_state = sc->sc_notify_link ?
+			    CDCE_NOTIFY_SPEED_CHANGE : CDCE_NOTIFY_DONE;
 			break;
 		case CDCE_NOTIFY_SPEED_CHANGE:
 			sc->sc_notify_state = CDCE_NOTIFY_DONE;
@@ -1364,7 +1377,7 @@ tr_setup:
 			req.bNotification = UCDC_N_NETWORK_CONNECTION;
 			req.wIndex[0] = sc->sc_ifaces_index[1];
 			req.wIndex[1] = 0;
-			USETW(req.wValue, 1); /* Connected */
+			USETW(req.wValue, sc->sc_notify_link);
 			USETW(req.wLength, 0);
 
 			pc = usbd_xfer_get_frame(xfer, 0);
@@ -1427,7 +1440,8 @@ cdce_handle_request(device_t dev,
 	    req->bRequest == UCDC_NCM_SET_ETHERNET_PACKET_FILTER) {
 		if (is_complete == 1) {
 			mtx_lock(&sc->sc_mtx);
-			sc->sc_notify_state = CDCE_NOTIFY_SPEED_CHANGE;
+			usbd_transfer_stop(sc->sc_xfer[CDCE_INTR_TX]);
+			sc->sc_notify_state = CDCE_NOTIFY_NETWORK_CONNECTION;
 			usbd_transfer_start(sc->sc_xfer[CDCE_INTR_TX]);
 			mtx_unlock(&sc->sc_mtx);
 		}
