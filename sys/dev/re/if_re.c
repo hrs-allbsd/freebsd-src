@@ -2143,16 +2143,15 @@ re_jumbo_newbuf(struct rl_softc *sc, int idx)
 static __inline void
 re_fixup_rx(struct mbuf *m)
 {
-	int                     i;
-	uint16_t                *src, *dst;
+	char *src, *dst;
 
-	src = mtod(m, uint16_t *);
-	dst = src - (RE_ETHER_ALIGN - ETHER_ALIGN) / sizeof *src;
+	src = mtod(m, char *);
+	dst = src - (RE_ETHER_ALIGN - ETHER_ALIGN);
 
-	for (i = 0; i < (m->m_len / sizeof(uint16_t) + 1); i++)
-		*dst++ = *src++;
+	if (m->m_len > 0)
+		memmove(dst, src, m->m_len);
 
-	m->m_data -= RE_ETHER_ALIGN - ETHER_ALIGN;
+	m->m_data = dst;
 }
 #endif
 
