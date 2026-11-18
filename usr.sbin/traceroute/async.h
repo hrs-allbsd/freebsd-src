@@ -5,13 +5,21 @@
 #include <stdint.h>
 #include <time.h>
 
+#define	ASYNC_DEFAULT_TTL	64
+#define	ASYNC_TTL_STEP		5
+
+enum async_match {
+	ASYNC_NO_MATCH,
+	ASYNC_HOP,
+	ASYNC_UNREACHABLE,
+	ASYNC_DESTINATION,
+};
+
 struct async_probe {
 	bool sent, done, reply;
-	int cc;
 	int64_t deadline;
 	struct timeval t1, t2;
-	struct sockaddr_in from;
-	u_char packet[sizeof(packet)];
+	struct async_received received;
 };
 
 static struct async_probe *async_probes;
@@ -33,74 +41,73 @@ async_now(struct timeval *tv)
 }
 
 #include "async_lookup.h"
+
+static int	async_receive(struct async_received *);
+static enum async_match async_match_reply(struct async_received *, int);
+static void	async_send(int, int, struct timeval *);
 #include "async_display.h"
 
 /*
- * Keep each slot representable in its wire sequence number or UDP port.
- * The initial range is validated before entering the collector.
+ * Keep each slot representable in its wire sequence number or port.
+ * The initial range is validated by the caller.
  */
 static int
-async_ttl_limit(void)
+async_ttl_limit(int first, int count, int available)
 {
-	int available;
 
-	available = UINT16_MAX;
-	if (proto->num == IPPROTO_UDP && !fixedPort)
-		available -= port;
-	return (MIN(UINT8_MAX, first_ttl + available / nprobes - 1));
+	return (MIN(UINT8_MAX, first + available / count - 1));
 }
 
-static void
-async_trace(bool extend)
+static int
+async_trace(int s, int first, int last, int count, int available,
+    int unreachable_count, unsigned int pause, bool extend)
 {
-	int *pending, npending, slot, i, received, cc, code;
+	int *pending, npending, slot, i, received, cc;
 	int completed, end, last_ttl, nfds;
-	int last_sent = first_ttl, sent = 0, replies = 0;
+	int last_sent = first, sent = 0, replies = 0;
 	int stage_pending, stage_probe, stage_start, next_end;
-	int64_t now, wake, nextsend[256] = { 0 };
-	int next_probe[256] = { 0 }, unreachable[256] = { 0 };
+	int64_t now, wake, nextsend[UINT8_MAX + 1] = { 0 };
+	int next_probe[UINT8_MAX + 1] = { 0 };
+	int unreachable[UINT8_MAX + 1] = { 0 };
 	int selected_probe, probe, row, ttl;
+	enum async_match match;
 	struct async_probe *p;
-	struct outdata data;
+	struct async_received reply = { 0 };
 	fd_set readfds, writefds;
 	struct timeval timeout;
-	struct sockaddr_in from;
 	struct timeval received_at;
-	socklen_t fromlen;
-	u_char buf[sizeof(packet)];
 
 	if (s >= FD_SETSIZE)
 		errx(1, "asynchronous receive socket exceeds FD_SETSIZE");
-	end = (max_ttl - first_ttl + 1) * nprobes;
+	end = (last - first + 1) * count;
 	async_count = extend ?
-	    (async_ttl_limit() - first_ttl + 1) * nprobes : end;
+	    (async_ttl_limit(first, count, available) - first + 1) * count :
+	    end;
 	async_probes = calloc(async_count, sizeof(*async_probes));
 	pending = calloc(async_count, sizeof(*pending));
 	if (async_probes == NULL || pending == NULL)
 		err(1, "calloc asynchronous probes");
 
 	npending = completed = 0;
-	stage_pending = end / nprobes;
+	stage_pending = end / count;
 	stage_start = stage_probe = 0;
 	/* Extended TTLs are outside the first pass. */
-	for (slot = end; slot < async_count; slot += nprobes) {
+	for (slot = end; slot < async_count; slot += count) {
 		async_probes[slot].done = true;
-		next_probe[first_ttl + slot / nprobes] = 1;
+		next_probe[first + slot / count] = 1;
 	}
 	async_display_begin();
 	for (;;) {
 		async_display_check_signal();
 		/* Bound the receive batch so unrelated traffic cannot starve sends. */
 		for (received = 0; received < 256; received++) {
-			fromlen = sizeof(from);
-			cc = recvfrom(s, buf, sizeof(buf), MSG_DONTWAIT,
-			    (struct sockaddr *)&from, &fromlen);
+			cc = async_receive(&reply);
 			if (cc == -1) {
 				if (errno == EINTR)
 					continue;
 				if (errno == EAGAIN || errno == EWOULDBLOCK)
 					break;
-				err(1, "recvfrom asynchronous probe");
+				err(1, "receive asynchronous probe");
 			}
 			now = async_now(&received_at);
 			for (i = 0; i < npending; i++) {
@@ -108,28 +115,24 @@ async_trace(bool extend)
 				p = &async_probes[slot];
 				if (slot >= end || p->deadline <= now)
 					continue;
-				code = packet_ok(buf, cc, &from, slot + 1);
-				if (code == 0)
+				match = async_match_reply(&reply, slot + 1);
+				if (match == ASYNC_NO_MATCH)
 					continue;
 				p->done = p->reply = true;
 				replies++;
 				if (extend && slot >= stage_start &&
-				    slot % nprobes == stage_probe)
+				    slot % count == stage_probe)
 					stage_pending--;
-				row = slot / nprobes;
-				if (code == -2 || code == ICMP_UNREACH_PORT + 1 ||
-				    code == ICMP_UNREACH_PROTOCOL + 1 ||
-				    (code > 0 &&
-				    unreachable_limit(++unreachable[row]))) {
-					end = (row + 1) * nprobes;
+				row = slot / count;
+				if (match == ASYNC_DESTINATION ||
+				    (match == ASYNC_UNREACHABLE &&
+				    ++unreachable[row] >= unreachable_count)) {
+					end = (row + 1) * count;
 					extend = false;
 				}
-				p->cc = cc;
-				p->from = from;
+				p->received = reply;
 				p->t2 = received_at;
-				if (slot < end)
-					lookup_enqueue(from.sin_addr);
-				memcpy(p->packet, buf, cc);
+				lookup_enqueue(reply.from);
 				pending[i] = pending[--npending];
 				break;
 			}
@@ -142,7 +145,7 @@ async_trace(bool extend)
 			p = &async_probes[slot];
 			if (slot >= end || p->deadline <= now) {
 				if (extend && slot >= stage_start &&
-				    slot % nprobes == stage_probe)
+				    slot % count == stage_probe)
 					stage_pending--;
 				p->done = true;
 				pending[i] = pending[--npending];
@@ -158,15 +161,15 @@ async_trace(bool extend)
 			else {
 				stage_start = end;
 				stage_probe = 1;
-				next_end = MIN(end + ASYNC_TTL_STEP * nprobes,
+				next_end = MIN(end + ASYNC_TTL_STEP * count,
 				    async_count);
-				stage_pending = (next_end - end) / nprobes;
+				stage_pending = (next_end - end) / count;
 				end = next_end;
 			}
 		}
-		last_ttl = first_ttl + end / nprobes - 1;
-		async_display_update(now, sent, npending, replies,
-		    MIN(last_sent, last_ttl));
+		last_ttl = first + end / count - 1;
+		async_display_update(now, sent, npending, replies, first,
+		    MIN(last_sent, last_ttl), count);
 		/* Finish once every row through the destination is settled. */
 		while (completed < end && async_probes[completed].done)
 			completed++;
@@ -182,10 +185,10 @@ async_trace(bool extend)
 		 * breaking ties by TTL.  Each hop has its own send timer.
 		 */
 		slot = -1;
-		selected_probe = nprobes;
-		for (ttl = first_ttl; ttl <= last_ttl; ttl++) {
+		selected_probe = count;
+		for (ttl = first; ttl <= last_ttl; ttl++) {
 			probe = next_probe[ttl];
-			if (probe == nprobes)
+			if (probe == count)
 				continue;
 			if (nextsend[ttl] > now) {
 				if (nextsend[ttl] < wake)
@@ -193,26 +196,22 @@ async_trace(bool extend)
 				continue;
 			}
 			if (probe < selected_probe) {
-				slot = (ttl - first_ttl) * nprobes + probe;
+				slot = (ttl - first) * count + probe;
 				selected_probe = probe;
 			}
 		}
 		if (slot >= 0) {
-			ttl = first_ttl + slot / nprobes;
+			ttl = first + slot / count;
 			next_probe[ttl]++;
 			last_sent = MAX(last_sent, ttl);
 			sent++;
 			p = &async_probes[slot];
 			p->sent = true;
-			data.seq = slot + 1;
-			data.ttl = ttl;
 			now = async_now(&p->t1);
-			data.tv = p->t1;
 			p->deadline = now + (int64_t)waittime * 1000000;
 			pending[npending++] = slot;
-			(*proto->prepare)(&data);
-			send_probe(slot + 1, data.ttl);
-			nextsend[ttl] = now + (int64_t)pausemsecs * 1000;
+			async_send(slot + 1, ttl, &p->t1);
+			nextsend[ttl] = now + (int64_t)pause * 1000;
 			continue;
 		}
 		now = async_now(NULL);
@@ -229,28 +228,8 @@ async_trace(bool extend)
 	}
 	async_display_check_signal();
 	async_display_finish();
-	max_ttl = first_ttl + end / nprobes - 1;
 	free(pending);
-}
-
-/* A saved reply is consumed once, matching wait_for_reply's interface. */
-static int
-async_reply(int seq, struct sockaddr_in *from, struct timeval *t1,
-    struct timeval *t2)
-{
-	struct async_probe *p;
-
-	if (seq < 1 || seq > async_count)
-		return (0);
-	p = &async_probes[seq - 1];
-	if (!p->reply)
-		return (0);
-	p->reply = false;
-	*from = p->from;
-	*t1 = p->t1;
-	*t2 = p->t2;
-	memcpy(packet, p->packet, p->cc);
-	return (p->cc);
+	return (first + end / count - 1);
 }
 
 static void

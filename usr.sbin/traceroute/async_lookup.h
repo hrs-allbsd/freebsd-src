@@ -16,7 +16,7 @@ struct lookup_result {
 
 struct lookup_entry {
 	struct lookup_entry *hash_next, *next[LOOKUP_COUNT];
-	struct in_addr addr;
+	async_addr_t addr;
 	struct lookup_result result[LOOKUP_COUNT];
 };
 
@@ -62,12 +62,12 @@ static void
 lookup_child(int fd, enum lookup_kind kind, bool sandbox)
 {
 	struct lookup_result result;
-	struct in_addr addr;
-	char numeric[INET_ADDRSTRLEN];
+	async_addr_t addr;
+	char numeric[INET6_ADDRSTRLEN];
 	void *connection = NULL;
 	int status;
 
-	close(s);
+	close(async_receive_fd());
 	close(sndsock);
 	if (kind == LOOKUP_DNS && sandbox && cap_enter() == -1 &&
 	    errno != ENOSYS)
@@ -82,7 +82,7 @@ lookup_child(int fd, enum lookup_kind kind, bool sandbox)
 	while (recv(fd, &addr, sizeof(addr), 0) == sizeof(addr)) {
 		memset(&result, 0, sizeof(result));
 		if (kind == LOOKUP_DNS) {
-			strlcpy(result.name, inetname(addr), sizeof(result.name));
+			strlcpy(result.name, async_name(&addr), sizeof(result.name));
 			result.found = result.name[0] != '\0';
 		} else {
 			if (connection == NULL) {
@@ -92,8 +92,9 @@ lookup_child(int fd, enum lookup_kind kind, bool sandbox)
 				if (cap_enter() == -1 && errno != ENOSYS)
 					break;
 			}
-			(void)inet_ntop(AF_INET, &addr, numeric, sizeof(numeric));
-			result.as = as_lookup(connection, numeric, AF_INET, &status);
+			async_numeric(&addr, numeric, sizeof(numeric));
+			result.as = as_lookup(connection, numeric, ASYNC_FAMILY,
+			    &status);
 			if (status != 0)
 				break;
 			result.found = true;
@@ -146,22 +147,25 @@ lookup_start(bool sandbox)
 }
 
 static struct lookup_entry **
-lookup_slot(struct in_addr addr)
+lookup_slot(async_addr_t addr)
 {
 	struct lookup_entry **slot;
+	const unsigned char *bytes;
 	uint32_t key;
+	size_t i;
 
-	key = addr.s_addr;
-	key ^= key >> 16;
-	key ^= key >> 8;
+	bytes = (const unsigned char *)&addr;
+	key = 0;
+	for (i = 0; i < sizeof(addr); i++)
+		key = key * 33 + bytes[i];
 	slot = &lookup_cache[key % nitems(lookup_cache)];
-	while (*slot != NULL && (*slot)->addr.s_addr != addr.s_addr)
+	while (*slot != NULL && !async_addr_equal(&(*slot)->addr, &addr))
 		slot = &(*slot)->hash_next;
 	return (slot);
 }
 
 static void
-lookup_enqueue(struct in_addr addr)
+lookup_enqueue(async_addr_t addr)
 {
 	struct lookup_worker *worker;
 	struct lookup_entry **slot, *entry;
@@ -210,8 +214,8 @@ lookup_selectfds(fd_set *readfds, fd_set *writefds, int *nfds)
 		if (worker->fd != -1 && worker->active == NULL &&
 		    worker->head != NULL) {
 			n = send(worker->fd, &worker->head->addr,
-			    sizeof(struct in_addr), MSG_DONTWAIT | MSG_NOSIGNAL);
-			if (n == sizeof(struct in_addr)) {
+			    sizeof(worker->head->addr), MSG_DONTWAIT | MSG_NOSIGNAL);
+			if (n == sizeof(worker->head->addr)) {
 				worker->active = worker->head;
 				worker->head = worker->head->next[i];
 				if (worker->head == NULL)
@@ -261,16 +265,16 @@ lookup_finish(void)
 }
 
 static void
-lookup_print(struct in_addr addr, const char *numeric)
+lookup_print(async_addr_t addr, const char *numeric)
 {
 	const struct lookup_entry *entry;
 
 	entry = *lookup_slot(addr);
 	if (entry != NULL && entry->result[LOOKUP_AS].found)
-		Printf(" [AS%u]", entry->result[LOOKUP_AS].as);
+		printf(" [AS%u]", entry->result[LOOKUP_AS].as);
 	if (entry != NULL && entry->result[LOOKUP_DNS].found &&
 	    strcmp(entry->result[LOOKUP_DNS].name, numeric) != 0)
-		Printf(" %s (%s)", entry->result[LOOKUP_DNS].name, numeric);
+		printf(" %s (%s)", entry->result[LOOKUP_DNS].name, numeric);
 	else
-		Printf(" %s", numeric);
+		printf(" %s", numeric);
 }

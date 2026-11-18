@@ -58,7 +58,7 @@ async_display_finish(void)
 
 /* Load the terminal database before entering capability mode. */
 static void
-async_display_init(int capacity_ttl)
+async_display_init(int first, int capacity_ttl)
 {
 	const char *term;
 	struct winsize size;
@@ -86,7 +86,7 @@ async_display_init(int capacity_ttl)
 		async_cursor_hide = NULL;
 	async_screen_rows = size.ws_row;
 	async_screen_columns = size.ws_col;
-	async_screen_height = capacity_ttl - first_ttl + 4;
+	async_screen_height = capacity_ttl - first + 4;
 	if (async_screen_height >= size.ws_row)
 		async_screen_height = size.ws_row - 1;
 	if (atexit(async_display_finish) == 0)
@@ -169,14 +169,13 @@ async_display_line(int row, char *line, int columns)
 
 static void
 async_display_update(int64_t now, int sent, int pending, int replies,
-    int last)
+    int first_ttl, int last, int count)
 {
 	struct winsize size;
 	struct async_probe *p;
-	struct sockaddr_in *to;
-	char line[1024], part[80], address[INET_ADDRSTRLEN];
+	char line[1024], part[80], address[INET6_ADDRSTRLEN];
 	int row, ttl, first, probe, slot, columns, rows, i;
-	in_addr_t previous;
+	const async_addr_t *previous;
 
 	if (!async_screen_active || now - async_screen_updated < 100000)
 		return;
@@ -202,10 +201,9 @@ async_display_update(int64_t now, int sent, int pending, int replies,
 		for (i = 0; i < async_screen_height; i++)
 			tputs(async_screen_up, 1, putchar);
 	}
-	to = (struct sockaddr_in *)&whereto;
-	(void)inet_ntop(AF_INET, &to->sin_addr, address, sizeof(address));
-	(void)snprintf(line, sizeof(line), "traceroute to %s (-Q %d)",
-	    address, async_mode);
+	async_destination(address, sizeof(address));
+	(void)snprintf(line, sizeof(line), "%s to %s (-Q %d)",
+	    getprogname(), address, count);
 	async_display_line(0, line, columns);
 	(void)snprintf(line, sizeof(line),
 	    "Sent %d  Received %d  Pending %d", sent, replies, pending);
@@ -217,19 +215,20 @@ async_display_update(int64_t now, int sent, int pending, int replies,
 		line[0] = '\0';
 		if (ttl <= last) {
 			(void)snprintf(line, sizeof(line), "%2d ", ttl);
-			previous = INADDR_ANY;
-			for (probe = 0; probe < nprobes; probe++) {
-				slot = (ttl - first_ttl) * nprobes + probe;
+			previous = NULL;
+			for (probe = 0; probe < count; probe++) {
+				slot = (ttl - first_ttl) * count + probe;
 				p = &async_probes[slot];
 				if (p->reply) {
-					if (previous != p->from.sin_addr.s_addr) {
-						(void)inet_ntop(AF_INET,
-						    &p->from.sin_addr, address,
-						    sizeof(address));
+					if (previous == NULL ||
+					    !async_addr_equal(previous,
+					    &p->received.from)) {
+						async_numeric(&p->received.from,
+						    address, sizeof(address));
 						(void)snprintf(part, sizeof(part),
 						    " %s", address);
 						strlcat(line, part, sizeof(line));
-						previous = p->from.sin_addr.s_addr;
+						previous = &p->received.from;
 					}
 					(void)snprintf(part, sizeof(part),
 					    " %.3f ms", deltaT(&p->t1, &p->t2));

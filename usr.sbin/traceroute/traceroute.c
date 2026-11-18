@@ -320,8 +320,6 @@ static const char devnull[] = "/dev/null";
 
 int async_mode;			/* parallel probes per TTL; 0 is serial */
 int nprobes = -1;
-#define ASYNC_DEFAULT_TTL 64
-#define ASYNC_TTL_STEP 5
 int max_ttl;
 int first_ttl = 1;
 u_short ident;
@@ -480,7 +478,119 @@ unreachable_limit(int count)
 	return (count > 0 && count >= nprobes - 1);
 }
 
+#define	ASYNC_FAMILY	AF_INET
+typedef struct in_addr async_addr_t;
+
+struct async_received {
+	async_addr_t from;
+	struct sockaddr_in sender;
+	int cc;
+	u_char packet[sizeof(packet)];
+};
+
+static int
+async_receive_fd(void)
+{
+
+	return (s);
+}
+
+static bool
+async_addr_equal(const async_addr_t *a, const async_addr_t *b)
+{
+
+	return (a->s_addr == b->s_addr);
+}
+
+static void
+async_numeric(const async_addr_t *addr, char *buf, size_t len)
+{
+
+	(void)inet_ntop(AF_INET, addr, buf, len);
+}
+
+static void
+async_destination(char *buf, size_t len)
+{
+	const struct sockaddr_in *to = (const struct sockaddr_in *)&whereto;
+
+	async_numeric(&to->sin_addr, buf, len);
+}
+
+static const char *
+async_name(const async_addr_t *addr)
+{
+
+	return (inetname(*addr));
+}
+
 #include "async.h"
+
+static int
+async_available(void)
+{
+
+	return (UINT16_MAX - (proto->num == IPPROTO_UDP && !fixedPort ?
+	    port : 0));
+}
+
+static int
+async_receive(struct async_received *reply)
+{
+	socklen_t len;
+
+	len = sizeof(reply->sender);
+	reply->cc = recvfrom(s, reply->packet, sizeof(reply->packet),
+	    MSG_DONTWAIT, (struct sockaddr *)&reply->sender, &len);
+	reply->from = reply->sender.sin_addr;
+	return (reply->cc);
+}
+
+static enum async_match
+async_match_reply(struct async_received *reply, int seq)
+{
+	int code;
+
+	code = packet_ok(reply->packet, reply->cc, &reply->sender, seq);
+	if (code == -2 || code == ICMP_UNREACH_PORT + 1 ||
+	    code == ICMP_UNREACH_PROTOCOL + 1)
+		return (ASYNC_DESTINATION);
+	if (code > 0)
+		return (ASYNC_UNREACHABLE);
+	return (code == 0 ? ASYNC_NO_MATCH : ASYNC_HOP);
+}
+
+static void
+async_send(int seq, int ttl, struct timeval *sent)
+{
+	struct outdata data;
+
+	data.seq = seq;
+	data.ttl = ttl;
+	data.tv = *sent;
+	(*proto->prepare)(&data);
+	send_probe(seq, ttl);
+}
+
+/* Consume a saved reply through the IPv4 printer's existing interface. */
+static int
+async_reply(int seq, struct sockaddr_in *from, struct timeval *t1,
+    struct timeval *t2)
+{
+	struct async_probe *p;
+
+	if (seq < 1 || seq > async_count)
+		return (0);
+	p = &async_probes[seq - 1];
+	if (!p->reply)
+		return (0);
+	p->reply = false;
+	*from = p->received.sender;
+	*t1 = p->t1;
+	*t2 = p->t2;
+	memcpy(packet, p->received.packet, p->received.cc);
+	return (p->received.cc);
+}
 
 const char *ip_hdr_key = "vhtslen id  off tlprsum srcip   dstip   opts";
 
@@ -995,7 +1105,9 @@ main(int argc, char **argv)
 #endif
 
 	if (async_mode) {
-		async_display_init(extend ? async_ttl_limit() : max_ttl);
+		async_display_init(first_ttl, extend ?
+		    async_ttl_limit(first_ttl, nprobes, async_available()) :
+		    max_ttl);
 		lookup_start(cansandbox);
 	}
 
@@ -1046,7 +1158,8 @@ main(int argc, char **argv)
 	(void)fflush(stderr);
 
 	if (async_mode) {
-		async_trace(extend);
+		max_ttl = async_trace(s, first_ttl, max_ttl, nprobes,
+		    async_available(), MAX(1, nprobes - 1), pausemsecs, extend);
 		lookup_finish();
 	}
 
