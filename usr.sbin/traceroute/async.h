@@ -58,7 +58,8 @@ async_trace(bool extend)
 	int last_sent = first_ttl, sent = 0, replies = 0;
 	int stage_pending, stage_probe, stage_start, next_end;
 	int64_t now, wake, nextsend[256] = { 0 };
-	int next_probe[256] = { 0 }, selected_probe, probe, ttl;
+	int next_probe[256] = { 0 }, unreachable[256] = { 0 };
+	int selected_probe, probe, row, ttl;
 	struct async_probe *p;
 	struct outdata data;
 	fd_set readfds, writefds;
@@ -115,9 +116,12 @@ async_trace(bool extend)
 				if (extend && slot >= stage_start &&
 				    slot % nprobes == stage_probe)
 					stage_pending--;
+				row = slot / nprobes;
 				if (code == -2 || code == ICMP_UNREACH_PORT + 1 ||
-				    code == ICMP_UNREACH_PROTOCOL + 1) {
-					end = (slot / nprobes + 1) * nprobes;
+				    code == ICMP_UNREACH_PROTOCOL + 1 ||
+				    (code > 0 &&
+				    unreachable_limit(++unreachable[row]))) {
+					end = (row + 1) * nprobes;
 					extend = false;
 				}
 				p->cc = cc;

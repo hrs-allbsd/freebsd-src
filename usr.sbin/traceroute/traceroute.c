@@ -473,6 +473,13 @@ struct	outproto protos[] = {
 };
 struct	outproto *proto = &protos[0];
 
+static bool
+unreachable_limit(int count)
+{
+
+	return (count > 0 && count >= nprobes - 1);
+}
+
 #include "async.h"
 
 const char *ip_hdr_key = "vhtslen id  off tlprsum srcip   dstip   opts";
@@ -1257,8 +1264,7 @@ main(int argc, char **argv)
 			Printf(" (%d%% loss)", (int)((int64_t)loss * 100 / sent));
 		}
 		putchar('\n');
-		if (got_there ||
-		    (unreachable > 0 && unreachable >= nprobes - 1))
+		if (got_there || unreachable_limit(unreachable))
 			break;
 	}
 	if (async_mode)
