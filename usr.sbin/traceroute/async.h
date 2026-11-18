@@ -34,11 +34,27 @@ async_now(struct timeval *tv)
 
 #include "async_lookup.h"
 
+/*
+ * Keep each slot representable in its wire sequence number or UDP port.
+ * The initial range is validated before entering the collector.
+ */
+static int
+async_ttl_limit(void)
+{
+	int available;
+
+	available = UINT16_MAX;
+	if (proto->num == IPPROTO_UDP && !fixedPort)
+		available -= port;
+	return (MIN(UINT8_MAX, first_ttl + available / nprobes - 1));
+}
+
 static void
-async_trace(void)
+async_trace(bool extend)
 {
 	int *pending, npending, slot, i, received, cc, code;
 	int completed, end, last_ttl, nfds;
+	int stage_pending, stage_probe, stage_start, next_end;
 	int64_t now, wake, nextsend[256] = { 0 };
 	int next_probe[256] = { 0 }, selected_probe, probe, ttl;
 	struct async_probe *p;
@@ -52,14 +68,22 @@ async_trace(void)
 
 	if (s >= FD_SETSIZE)
 		errx(1, "asynchronous receive socket exceeds FD_SETSIZE");
-	async_count = (max_ttl - first_ttl + 1) * nprobes;
+	end = (max_ttl - first_ttl + 1) * nprobes;
+	async_count = extend ?
+	    (async_ttl_limit() - first_ttl + 1) * nprobes : end;
 	async_probes = calloc(async_count, sizeof(*async_probes));
 	pending = calloc(async_count, sizeof(*pending));
 	if (async_probes == NULL || pending == NULL)
 		err(1, "calloc asynchronous probes");
 
 	npending = completed = 0;
-	end = async_count;
+	stage_pending = end / nprobes;
+	stage_start = stage_probe = 0;
+	/* Extended TTLs are outside the first pass. */
+	for (slot = end; slot < async_count; slot += nprobes) {
+		async_probes[slot].done = true;
+		next_probe[first_ttl + slot / nprobes] = 1;
+	}
 	for (;;) {
 		/* Bound the receive batch so unrelated traffic cannot starve sends. */
 		for (received = 0; received < 256; received++) {
@@ -83,9 +107,14 @@ async_trace(void)
 				if (code == 0)
 					continue;
 				p->done = p->reply = true;
-				if ((code == -2 || code == ICMP_UNREACH_PORT + 1 ||
-				    code == ICMP_UNREACH_PROTOCOL + 1) && slot < end)
+				if (extend && slot >= stage_start &&
+				    slot % nprobes == stage_probe)
+					stage_pending--;
+				if (code == -2 || code == ICMP_UNREACH_PORT + 1 ||
+				    code == ICMP_UNREACH_PROTOCOL + 1) {
 					end = (slot / nprobes + 1) * nprobes;
+					extend = false;
+				}
 				p->cc = cc;
 				p->from = from;
 				p->t2 = received_at;
@@ -103,6 +132,9 @@ async_trace(void)
 			slot = pending[i];
 			p = &async_probes[slot];
 			if (slot >= end || p->deadline <= now) {
+				if (extend && slot >= stage_start &&
+				    slot % nprobes == stage_probe)
+					stage_pending--;
 				p->done = true;
 				pending[i] = pending[--npending];
 				continue;
@@ -110,6 +142,18 @@ async_trace(void)
 			if (p->deadline < wake)
 				wake = p->deadline;
 			i++;
+		}
+		if (extend && stage_pending == 0) {
+			if (end == async_count)
+				extend = false;
+			else {
+				stage_start = end;
+				stage_probe = 1;
+				next_end = MIN(end + ASYNC_TTL_STEP * nprobes,
+				    async_count);
+				stage_pending = (next_end - end) / nprobes;
+				end = next_end;
+			}
 		}
 		/* Finish once every row through the destination is settled. */
 		while (completed < end && async_probes[completed].done)
@@ -167,6 +211,7 @@ async_trace(void)
 			err(1, "select asynchronous probes");
 		}
 	}
+	max_ttl = first_ttl + end / nprobes - 1;
 	free(pending);
 }
 

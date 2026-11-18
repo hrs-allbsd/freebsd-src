@@ -225,6 +225,17 @@ Replies are stored and printed in TTL and probe order.
 Once a reply indicates that the destination has been reached, no further
 probes are sent above that TTL.
 Outstanding probes above that TTL are no longer awaited.
+Without
+.Fl m ,
+the initial maximum TTL is 64.
+If the first probe at every initial TTL finishes without reaching the
+destination, extend the search by five hops.
+After the first transmitted probe at every TTL in a new group finishes
+without reaching the destination, extend by up to five more hops.
+The search ends at TTL 255 or when probe identifiers run out.
+This extension requires at least two probes per hop.
+The unsent first probe at an added TTL is shown as a dot and does not
+count toward packet loss.
 The RTT is measured before address and AS number lookups.
 Reverse DNS and requested AS lookups proceed while probes are collected.
 After collection, outstanding lookups are given up to five additional

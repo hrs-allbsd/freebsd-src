@@ -320,6 +320,8 @@ static const char devnull[] = "/dev/null";
 
 int async_mode;			/* parallel probes per TTL; 0 is serial */
 int nprobes = -1;
+#define ASYNC_DEFAULT_TTL 64
+#define ASYNC_TTL_STEP 5
 int max_ttl;
 int first_ttl = 1;
 u_short ident;
@@ -504,7 +506,7 @@ main(int argc, char **argv)
 	cap_channel_t *casper;
 #endif
 	cap_rights_t rights;
-	bool cansandbox;
+	bool cansandbox, extend = false, max_ttl_set = false;
 
 	/* Insure the socket fds won't be 0, 1 or 2 */
 	if (open(devnull, O_RDONLY) < 0 ||
@@ -630,6 +632,7 @@ main(int argc, char **argv)
 
 		case 'm':
 			max_ttl = str2val(optarg, "max ttl", 1, 255);
+			max_ttl_set = true;
 			break;
 
 		case 'n':
@@ -707,6 +710,10 @@ main(int argc, char **argv)
 	} else if (nprobes == -1)
 		nprobes = printdiff ? 1 : 3;
 
+	if (async_mode && !max_ttl_set) {
+		max_ttl = ASYNC_DEFAULT_TTL;
+		extend = nprobes > 1;
+	}
 	if (first_ttl > max_ttl) {
 		Fprintf(stderr,
 		    "%s: first ttl (%d) may not be greater than max ttl (%d)\n",
@@ -716,6 +723,7 @@ main(int argc, char **argv)
 
 	if (async_mode) {
 		int hops = max_ttl - first_ttl + 1;
+
 
 		if (proto->prepare != udp_prep && proto->prepare != icmp_prep)
 			errx(1, "-Q supports only UDP and ICMP (-I)");
@@ -1029,7 +1037,7 @@ main(int argc, char **argv)
 	(void)fflush(stderr);
 
 	if (async_mode) {
-		async_trace();
+		async_trace(extend);
 		lookup_finish();
 	}
 
@@ -1039,7 +1047,7 @@ main(int argc, char **argv)
 		int got_there = 0;
 		int unreachable = 0;
 		int sentfirst = 0;
-		int loss;
+		int loss, sent = nprobes;
 
 		Printf("%2d ", ttl);
 		for (probe = 0, loss = 0; probe < nprobes; ++probe) {
@@ -1054,6 +1062,11 @@ main(int argc, char **argv)
 			++seq;
 			outdata.seq = async_mode ? seq : (u_char)seq;
 			async_read = 0;
+			if (extend && ttl > ASYNC_DEFAULT_TTL && probe == 0) {
+				Printf(" .");
+				sent--;
+				continue;
+			}
 			outdata.ttl = ttl;
 
 			if (!async_mode) {
@@ -1239,7 +1252,7 @@ main(int argc, char **argv)
 			(void)fflush(stdout);
 		}
 		if (sump) {
-			Printf(" (%d%% loss)", (int)((int64_t)loss * 100 / nprobes));
+			Printf(" (%d%% loss)", (int)((int64_t)loss * 100 / sent));
 		}
 		putchar('\n');
 		if (got_there ||
