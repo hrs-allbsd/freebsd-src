@@ -222,17 +222,21 @@ Each probe has its own
 .Fl w
 second timeout measured from transmission.
 Replies are stored and printed in TTL and probe order.
-Once a reply indicates that the destination has been reached, no further
-probes are sent above that TTL.
-Outstanding probes above that TTL are no longer awaited.
+Probing above a hop stops when a reply indicates that the destination
+has been reached.
+It also stops when at least one of the hop's probes receives another
+ICMP unreachable reply and at most one probe lacks such a reply.
+Outstanding probes above that TTL are no longer awaited, and the TTL
+limit is no longer extended.
 Without
 .Fl m ,
 the initial maximum TTL is 64.
-If the first probe at every initial TTL finishes without reaching the
-destination, extend the search by five hops.
+If the first probe at every initial TTL finishes without meeting
+either stopping condition, extend the search by five hops.
 After the first transmitted probe at every TTL in a new group finishes
-without reaching the destination, extend by up to five more hops.
-The search ends at TTL 255 or when probe identifiers run out.
+without meeting either condition, extend by up to five more hops.
+The limit cannot exceed TTL 255 or the range of available probe
+identifiers.
 This extension requires at least two probes per hop.
 The unsent first probe at an added TTL is shown as a dot and does not
 count toward packet loss.
