@@ -38,7 +38,7 @@ static void
 async_trace(void)
 {
 	int *pending, npending, slot, i, received, cc, code;
-	int completed, end, nfds;
+	int completed, end, last_ttl, nfds;
 	int64_t now, wake, nextsend[256] = { 0 };
 	int next_probe[256] = { 0 }, selected_probe, probe, ttl;
 	struct async_probe *p;
@@ -77,7 +77,7 @@ async_trace(void)
 			for (i = 0; i < npending; i++) {
 				slot = pending[i];
 				p = &async_probes[slot];
-				if (p->deadline <= now)
+				if (slot >= end || p->deadline <= now)
 					continue;
 				code = packet_ok(buf, cc, &from, slot + 1);
 				if (code == 0)
@@ -100,8 +100,9 @@ async_trace(void)
 		now = async_now(NULL);
 		wake = INT64_MAX;
 		for (i = 0; i < npending;) {
-			p = &async_probes[pending[i]];
-			if (p->deadline <= now) {
+			slot = pending[i];
+			p = &async_probes[slot];
+			if (slot >= end || p->deadline <= now) {
 				p->done = true;
 				pending[i] = pending[--npending];
 				continue;
@@ -126,7 +127,8 @@ async_trace(void)
 		 */
 		slot = -1;
 		selected_probe = nprobes;
-		for (ttl = first_ttl; ttl <= max_ttl; ttl++) {
+		last_ttl = first_ttl + end / nprobes - 1;
+		for (ttl = first_ttl; ttl <= last_ttl; ttl++) {
 			probe = next_probe[ttl];
 			if (probe == nprobes)
 				continue;

@@ -222,6 +222,9 @@ Each probe has its own
 .Fl w
 second timeout measured from transmission.
 Replies are stored and printed in TTL and probe order.
+Once a reply indicates that the destination has been reached, no further
+probes are sent above that TTL.
+Outstanding probes above that TTL are no longer awaited.
 The RTT is measured before address and AS number lookups.
 Reverse DNS and requested AS lookups proceed while probes are collected.
 After collection, outstanding lookups are given up to five additional
