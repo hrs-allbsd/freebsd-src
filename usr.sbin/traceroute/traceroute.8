@@ -243,6 +243,17 @@ seconds in total.
 Addresses whose names are unavailable are printed numerically, and
 unavailable AS numbers are omitted.
 .Pp
+On terminals with cursor movement and line clearing capabilities,
+a numeric preview is updated during collection.
+A dot marks an unsent probe, a question mark marks a pending probe,
+and an asterisk marks an expired probe.
+Terminals with an alternate screen use it for the preview.
+Other capable terminals use a temporary region and stop the preview on
+resize.
+The normal result is printed after collection.
+Redirected output and terminals without the required capabilities, or
+with fewer than 20 columns or 6 rows, have no preview.
+.Pp
 This mode supports UDP and ICMP
 .Pq Fl I
 only, and cannot be combined with

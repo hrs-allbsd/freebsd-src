@@ -987,8 +987,10 @@ main(int argc, char **argv)
 		cansandbox = false;
 #endif
 
-	if (async_mode)
+	if (async_mode) {
+		async_display_init(extend ? async_ttl_limit() : max_ttl);
 		lookup_start(cansandbox);
+	}
 
 	caph_cache_catpages();
 

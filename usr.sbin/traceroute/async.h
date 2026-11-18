@@ -6,7 +6,7 @@
 #include <time.h>
 
 struct async_probe {
-	bool done, reply;
+	bool sent, done, reply;
 	int cc;
 	int64_t deadline;
 	struct timeval t1, t2;
@@ -33,6 +33,7 @@ async_now(struct timeval *tv)
 }
 
 #include "async_lookup.h"
+#include "async_display.h"
 
 /*
  * Keep each slot representable in its wire sequence number or UDP port.
@@ -54,6 +55,7 @@ async_trace(bool extend)
 {
 	int *pending, npending, slot, i, received, cc, code;
 	int completed, end, last_ttl, nfds;
+	int last_sent = first_ttl, sent = 0, replies = 0;
 	int stage_pending, stage_probe, stage_start, next_end;
 	int64_t now, wake, nextsend[256] = { 0 };
 	int next_probe[256] = { 0 }, selected_probe, probe, ttl;
@@ -84,7 +86,9 @@ async_trace(bool extend)
 		async_probes[slot].done = true;
 		next_probe[first_ttl + slot / nprobes] = 1;
 	}
+	async_display_begin();
 	for (;;) {
+		async_display_check_signal();
 		/* Bound the receive batch so unrelated traffic cannot starve sends. */
 		for (received = 0; received < 256; received++) {
 			fromlen = sizeof(from);
@@ -107,6 +111,7 @@ async_trace(bool extend)
 				if (code == 0)
 					continue;
 				p->done = p->reply = true;
+				replies++;
 				if (extend && slot >= stage_start &&
 				    slot % nprobes == stage_probe)
 					stage_pending--;
@@ -155,6 +160,9 @@ async_trace(bool extend)
 				end = next_end;
 			}
 		}
+		last_ttl = first_ttl + end / nprobes - 1;
+		async_display_update(now, sent, npending, replies,
+		    MIN(last_sent, last_ttl));
 		/* Finish once every row through the destination is settled. */
 		while (completed < end && async_probes[completed].done)
 			completed++;
@@ -171,7 +179,6 @@ async_trace(bool extend)
 		 */
 		slot = -1;
 		selected_probe = nprobes;
-		last_ttl = first_ttl + end / nprobes - 1;
 		for (ttl = first_ttl; ttl <= last_ttl; ttl++) {
 			probe = next_probe[ttl];
 			if (probe == nprobes)
@@ -189,7 +196,10 @@ async_trace(bool extend)
 		if (slot >= 0) {
 			ttl = first_ttl + slot / nprobes;
 			next_probe[ttl]++;
+			last_sent = MAX(last_sent, ttl);
+			sent++;
 			p = &async_probes[slot];
+			p->sent = true;
 			data.seq = slot + 1;
 			data.ttl = ttl;
 			now = async_now(&p->t1);
@@ -203,6 +213,8 @@ async_trace(bool extend)
 		}
 		now = async_now(NULL);
 		wake = wake > now ? wake - now : 0;
+		if (async_screen_active)
+			wake = MIN(wake, 100000);
 		timeout.tv_sec = wake / 1000000;
 		timeout.tv_usec = wake % 1000000;
 		if (select(nfds, &readfds, &writefds, NULL, &timeout) == -1) {
@@ -211,6 +223,8 @@ async_trace(bool extend)
 			err(1, "select asynchronous probes");
 		}
 	}
+	async_display_check_signal();
+	async_display_finish();
 	max_ttl = first_ttl + end / nprobes - 1;
 	free(pending);
 }
