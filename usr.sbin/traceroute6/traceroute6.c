@@ -258,8 +258,10 @@
 #include <poll.h>
 #endif
 #include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <netinet/ip.h>
@@ -344,6 +346,18 @@ static int as_path;			/* print as numbers for each hop */
 static int ecnflag;			/* ECN bleaching detection flag */
 static char *as_server = NULL;
 static void *asn;
+static unsigned int pausemsecs;
+
+static void
+pause_probe(void)
+{
+	struct timespec delay;
+
+	delay.tv_sec = pausemsecs / 1000;
+	delay.tv_nsec = (pausemsecs % 1000) * 1000000;
+	while (nanosleep(&delay, &delay) == -1 && errno == EINTR)
+		continue;
+}
 
 int
 main(int argc, char *argv[])
@@ -353,7 +367,7 @@ main(int argc, char *argv[])
 	int ch, i, on = 1, seq, rcvcmsglen, error;
 	struct addrinfo hints, *res;
 	static u_char *rcvcmsgbuf;
-	u_long probe, hops, lport, ltclass;
+	u_long probe, hops, lport, ltclass, pause;
 	struct hostent *hp;
 	size_t size, minlen;
 	uid_t uid;
@@ -403,7 +417,7 @@ main(int argc, char *argv[])
 	seq = 0;
 	ident = htons(getpid() & 0xffff); /* same as ping6 */
 
-	while ((ch = getopt(argc, argv, "aA:deEf:g:Ilm:nNp:q:rs:St:TUvw:")) != -1)
+	while ((ch = getopt(argc, argv, "aA:deEf:g:Ilm:nNp:q:rs:St:TUvw:z:")) != -1)
 		switch (ch) {
 		case 'a':
 			as_path = 1;
@@ -559,6 +573,14 @@ main(int argc, char *argv[])
 				    "traceroute6: wait must be >= 1 sec.\n");
 				exit(1);
 			}
+			break;
+		case 'z':
+			errno = 0;
+			pause = strtoul(optarg, &ep, 10);
+			if (errno != 0 || *optarg == '\0' || *ep != '\0' ||
+			    pause > INT_MAX)
+				errx(1, "invalid pause in milliseconds: %s", optarg);
+			pausemsecs = pause;
 			break;
 		default:
 			usage();
@@ -962,6 +984,8 @@ main(int argc, char *argv[])
 			int cc;
 			struct timeval t1, t2;
 
+			if (probe > 0 && pausemsecs > 0)
+				pause_probe();
 			(void) gettimeofday(&t1, NULL);
 			send_probe(++seq, hops);
 			while ((cc = wait_for_reply(rcvsock, &rcvmhdr))) {
@@ -1848,6 +1872,6 @@ usage(void)
 	fprintf(stderr,
 "Usage: traceroute6 [-adeEIlnNrSTUv] [-A as_server] [-f firsthop] [-g gateway]\n"
 "\t[-m hoplimit] [-p port] [-q probes] [-s src] [-t tclass]\n"
-"\t[-w waittime] target [datalen]\n");
+"\t[-w waittime] [-z pausemsecs] target [datalen]\n");
 	exit(1);
 }

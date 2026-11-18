@@ -68,6 +68,9 @@
 .Op Fl w Ar waittime
 .Ek
 .Bk -words
+.Op Fl z Ar pausemsecs
+.Ek
+.Bk -words
 .Ar target
 .Op Ar datalen
 .Ek
@@ -176,7 +179,10 @@ This is the default.
 .It Fl v
 Be verbose.
 .It Fl w Ar waittime
-Specify the delay time between probes.
+Set the time in seconds to wait for a reply (default 5).
+.It Fl z Ar pausemsecs
+Set the minimum interval in milliseconds between probes sent to the
+same hop limit (default 0).
 .El
 .Pp
 This program prints the route to the given destination and the round-trip time
