@@ -311,6 +311,9 @@ void	usage(void);
 static int rcvsock;			/* receive (icmp) socket file descriptor */
 static int sndsock;			/* send (raw/udp) socket file descriptor */
 
+#define	RCV_CMSG_LEN	(CMSG_SPACE(sizeof(struct in6_pktinfo)) + \
+			 CMSG_SPACE(sizeof(int)))
+
 static struct msghdr rcvmhdr;
 static struct iovec rcviov[2];
 static int rcvhlim;
@@ -364,7 +367,7 @@ main(int argc, char *argv[])
 {
 	int mib[4] = { CTL_NET, PF_INET6, IPPROTO_IPV6, IPV6CTL_DEFHLIM };
 	char hbuf[NI_MAXHOST], src0[NI_MAXHOST], *ep;
-	int ch, i, on = 1, seq, rcvcmsglen, error;
+	int ch, i, on = 1, seq, error;
 	struct addrinfo hints, *res;
 	static u_char *rcvcmsgbuf;
 	u_long probe, hops, lport, ltclass, pause;
@@ -737,14 +740,12 @@ main(int argc, char *argv[])
 	rcvmhdr.msg_namelen = sizeof(Rcv);
 	rcvmhdr.msg_iov = rcviov;
 	rcvmhdr.msg_iovlen = 1;
-	rcvcmsglen = CMSG_SPACE(sizeof(struct in6_pktinfo)) +
-	    CMSG_SPACE(sizeof(int));
-	if ((rcvcmsgbuf = malloc(rcvcmsglen)) == NULL) {
+	if ((rcvcmsgbuf = malloc(RCV_CMSG_LEN)) == NULL) {
 		fprintf(stderr, "traceroute6: malloc failed\n");
 		exit(1);
 	}
 	rcvmhdr.msg_control = (caddr_t) rcvcmsgbuf;
-	rcvmhdr.msg_controllen = rcvcmsglen;
+	rcvmhdr.msg_controllen = RCV_CMSG_LEN;
 
 	if (options & SO_DEBUG)
 		(void) setsockopt(rcvsock, SOL_SOCKET, SO_DEBUG,
@@ -1076,6 +1077,16 @@ main(int argc, char *argv[])
 	exit(0);
 }
 
+/* recvmsg() replaces the capacities with the lengths it returned. */
+static ssize_t
+receive_reply(int sock, struct msghdr *mhdr, int flags)
+{
+
+	mhdr->msg_namelen = sizeof(Rcv);
+	mhdr->msg_controllen = RCV_CMSG_LEN;
+	return (recvmsg(sock, mhdr, flags));
+}
+
 int
 wait_for_reply(int sock, struct msghdr *mhdr)
 {
@@ -1089,7 +1100,7 @@ wait_for_reply(int sock, struct msghdr *mhdr)
 
 	if (poll(pfd, 1, waittime * 1000) > 0 &&
 	    pfd[0].revents & POLLIN)
-		cc = recvmsg(rcvsock, mhdr, 0);
+		cc = receive_reply(sock, mhdr, 0);
 
 	return (cc);
 #else
@@ -1105,7 +1116,7 @@ wait_for_reply(int sock, struct msghdr *mhdr)
 	wait.tv_sec = waittime; wait.tv_usec = 0;
 
 	if (select(sock + 1, fdsp, (fd_set *)0, (fd_set *)0, &wait) > 0)
-		cc = recvmsg(rcvsock, mhdr, 0);
+		cc = receive_reply(sock, mhdr, 0);
 
 	free(fdsp);
 	return (cc);
