@@ -215,7 +215,9 @@ probes per hop (1 to 255), collecting replies asynchronously.
 Multiple probes at the same TTL may await replies concurrently.
 This option is mutually exclusive with
 .Fl q .
-Probes are sent in TTL and probe order.
+Each TTL has an independent send timer.
+Among TTLs ready to send, earlier probe numbers take precedence,
+followed by lower TTLs.
 Each probe has its own
 .Fl w
 second timeout measured from transmission.
@@ -299,10 +301,9 @@ So they are always calculated when using ICMP.
 Set the time (in milliseconds) to pause between probes (default 0).
 With
 .Fl Q ,
-the timer sends another probe after this interval (default 30 ms).
-A matching response can advance the next send when
-.Fl z
-is omitted.
+this sets the minimum interval between successive transmissions at the
+same TTL.
+Other TTLs may send during that interval.
 Some systems such as Solaris and routers such as Ciscos rate limit ICMP
 messages.
 A good value to use with this is 500 (e.g., 1/2 second).

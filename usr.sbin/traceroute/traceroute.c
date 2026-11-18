@@ -318,7 +318,6 @@ char *hostname;
 char *device;
 static const char devnull[] = "/dev/null";
 
-static bool async_reply_wakes_sender;
 int async_mode;			/* parallel probes per TTL; 0 is serial */
 int nprobes = -1;
 int max_ttl;
@@ -505,7 +504,7 @@ main(int argc, char **argv)
 	cap_channel_t *casper;
 #endif
 	cap_rights_t rights;
-	bool cansandbox, pause_set = false;
+	bool cansandbox;
 
 	/* Insure the socket fds won't be 0, 1 or 2 */
 	if (open(devnull, O_RDONLY) < 0 ||
@@ -690,7 +689,6 @@ main(int argc, char **argv)
 			break;
 
 		case 'z':
-			pause_set = true;
 			pausemsecs = str2val(optarg, "pause msecs",
 			    0, 60 * 60 * 1000);
 			break;
@@ -709,10 +707,6 @@ main(int argc, char **argv)
 	} else if (nprobes == -1)
 		nprobes = printdiff ? 1 : 3;
 
-	if (async_mode && !pause_set) {
-		pausemsecs = 30;
-		async_reply_wakes_sender = true;
-	}
 	if (first_ttl > max_ttl) {
 		Fprintf(stderr,
 		    "%s: first ttl (%d) may not be greater than max ttl (%d)\n",

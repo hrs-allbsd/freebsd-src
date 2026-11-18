@@ -37,9 +37,10 @@ async_now(struct timeval *tv)
 static void
 async_trace(void)
 {
-	int *pending, npending, next, slot, i, received, cc, code;
+	int *pending, npending, slot, i, received, cc, code;
 	int completed, end, nfds;
-	int64_t now, wake, nextsend;
+	int64_t now, wake, nextsend[256] = { 0 };
+	int next_probe[256] = { 0 }, selected_probe, probe, ttl;
 	struct async_probe *p;
 	struct outdata data;
 	fd_set readfds, writefds;
@@ -57,9 +58,8 @@ async_trace(void)
 	if (async_probes == NULL || pending == NULL)
 		err(1, "calloc asynchronous probes");
 
-	npending = next = completed = 0;
+	npending = completed = 0;
 	end = async_count;
-	nextsend = 0;
 	for (;;) {
 		/* Bound the receive batch so unrelated traffic cannot starve sends. */
 		for (received = 0; received < 256; received++) {
@@ -93,8 +93,6 @@ async_trace(void)
 					lookup_enqueue(from.sin_addr);
 				memcpy(p->packet, buf, cc);
 				pending[i] = pending[--npending];
-				if (async_reply_wakes_sender)
-					nextsend = now;
 				break;
 			}
 		}
@@ -122,22 +120,41 @@ async_trace(void)
 		FD_ZERO(&writefds);
 		FD_SET(s, &readfds);
 		lookup_selectfds(&readfds, &writefds, &nfds);
-		if (next < async_count && now >= nextsend) {
-			slot = next++;
+		/*
+		 * Among ready hops, send the lowest probe index first,
+		 * breaking ties by TTL.  Each hop has its own send timer.
+		 */
+		slot = -1;
+		selected_probe = nprobes;
+		for (ttl = first_ttl; ttl <= max_ttl; ttl++) {
+			probe = next_probe[ttl];
+			if (probe == nprobes)
+				continue;
+			if (nextsend[ttl] > now) {
+				if (nextsend[ttl] < wake)
+					wake = nextsend[ttl];
+				continue;
+			}
+			if (probe < selected_probe) {
+				slot = (ttl - first_ttl) * nprobes + probe;
+				selected_probe = probe;
+			}
+		}
+		if (slot >= 0) {
+			ttl = first_ttl + slot / nprobes;
+			next_probe[ttl]++;
 			p = &async_probes[slot];
 			data.seq = slot + 1;
-			data.ttl = first_ttl + slot / nprobes;
+			data.ttl = ttl;
 			now = async_now(&p->t1);
 			data.tv = p->t1;
 			p->deadline = now + (int64_t)waittime * 1000000;
 			pending[npending++] = slot;
 			(*proto->prepare)(&data);
 			send_probe(slot + 1, data.ttl);
-			nextsend = now + (int64_t)pausemsecs * 1000;
+			nextsend[ttl] = now + (int64_t)pausemsecs * 1000;
 			continue;
 		}
-		if (next < async_count && nextsend < wake)
-			wake = nextsend;
 		now = async_now(NULL);
 		wake = wake > now ? wake - now : 0;
 		timeout.tv_sec = wake / 1000000;
