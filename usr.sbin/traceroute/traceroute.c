@@ -284,7 +284,7 @@ struct hostinfo {
 
 /* Data section of the probe packet */
 struct outdata {
-	u_char seq;		/* sequence number of this packet */
+	u_short seq;		/* 16 bits in asynchronous mode */
 	u_char ttl;		/* ttl packet left with */
 	struct timeval tv;	/* time packet left */
 };
@@ -318,6 +318,8 @@ char *hostname;
 char *device;
 static const char devnull[] = "/dev/null";
 
+static bool async_reply_wakes_sender;
+int async_mode;			/* parallel probes per TTL; 0 is serial */
 int nprobes = -1;
 int max_ttl;
 int first_ttl = 1;
@@ -470,6 +472,8 @@ struct	outproto protos[] = {
 };
 struct	outproto *proto = &protos[0];
 
+#include "async.h"
+
 const char *ip_hdr_key = "vhtslen id  off tlprsum srcip   dstip   opts";
 
 int
@@ -483,6 +487,7 @@ main(int argc, char **argv)
 	register struct sockaddr_in *to = (struct sockaddr_in *)&whereto;
 	register struct hostinfo *hi;
 	int on = 1;
+	int async_read;
 	register struct protoent *pe;
 	register int ttl, probe, i;
 	register int seq = 0;
@@ -500,7 +505,7 @@ main(int argc, char **argv)
 	cap_channel_t *casper;
 #endif
 	cap_rights_t rights;
-	bool cansandbox;
+	bool cansandbox, pause_set = false;
 
 	/* Insure the socket fds won't be 0, 1 or 2 */
 	if (open(devnull, O_RDONLY) < 0 ||
@@ -569,7 +574,7 @@ main(int argc, char **argv)
 		prog = argv[0];
 
 	opterr = 0;
-	while ((op = getopt(argc, argv, "aA:eEdDFInrSvxf:g:i:M:m:P:p:q:s:t:w:z:")) != EOF)
+	while ((op = getopt(argc, argv, "aA:eEdDFInrSvxf:g:i:M:m:P:p:q:Q:s:t:w:z:")) != EOF)
 		switch (op) {
 		case 'a':
 			as_path = 1;
@@ -645,6 +650,11 @@ main(int argc, char **argv)
 			nprobes = str2val(optarg, "nprobes", 1, -1);
 			break;
 
+		case 'Q':
+			async_mode = str2val(optarg, "parallel probes per TTL",
+			    1, 255);
+			break;
+
 		case 'r':
 			options |= SO_DONTROUTE;
 			break;
@@ -680,6 +690,7 @@ main(int argc, char **argv)
 			break;
 
 		case 'z':
+			pause_set = true;
 			pausemsecs = str2val(optarg, "pause msecs",
 			    0, 60 * 60 * 1000);
 			break;
@@ -691,14 +702,36 @@ main(int argc, char **argv)
 	/* Set requested port, if any, else default for this protocol */
 	port = (requestPort != -1) ? requestPort : proto->port;
 
-	if (nprobes == -1)
+	if (async_mode) {
+		if (nprobes != -1)
+			errx(1, "-q and -Q are mutually exclusive");
+		nprobes = async_mode;
+	} else if (nprobes == -1)
 		nprobes = printdiff ? 1 : 3;
 
+	if (async_mode && !pause_set) {
+		pausemsecs = 30;
+		async_reply_wakes_sender = true;
+	}
 	if (first_ttl > max_ttl) {
 		Fprintf(stderr,
 		    "%s: first ttl (%d) may not be greater than max ttl (%d)\n",
 		    prog, first_ttl, max_ttl);
 		exit(1);
+	}
+
+	if (async_mode) {
+		int hops = max_ttl - first_ttl + 1;
+
+		if (proto->prepare != udp_prep && proto->prepare != icmp_prep)
+			errx(1, "-Q supports only UDP and ICMP (-I)");
+		if (printdiff || verbose)
+			errx(1, "-Q cannot be combined with -D or -v");
+		if (nprobes > 65535 / hops)
+			errx(1, "-Q requires at most 65535 probes in total");
+		if (proto->num == IPPROTO_UDP && !fixedPort &&
+		    nprobes * hops > 65535 - port)
+			errx(1, "-Q probe ports exceed 65535; lower -p, -Q or -m");
 	}
 
 	if (!doipcksum)
@@ -998,6 +1031,9 @@ main(int argc, char **argv)
 	Fprintf(stderr, ", %d hops max, %d byte packets\n", max_ttl, packlen);
 	(void)fflush(stderr);
 
+	if (async_mode)
+		async_trace();
+
 	for (ttl = first_ttl; ttl <= max_ttl; ++ttl) {
 		u_int32_t lastaddr = 0;
 		int gotlastaddr = 0;
@@ -1013,27 +1049,33 @@ main(int argc, char **argv)
 			register struct ip *ip;
 			struct outdata outdata;
 
-			if (sentfirst && pausemsecs > 0)
+			if (!async_mode && sentfirst && pausemsecs > 0)
 				usleep(pausemsecs * 1000);
 			/* Prepare outgoing data */
-			outdata.seq = ++seq;
+			++seq;
+			outdata.seq = async_mode ? seq : (u_char)seq;
+			async_read = 0;
 			outdata.ttl = ttl;
 
-			/* Avoid alignment problems by copying bytewise: */
-			(void)gettimeofday(&t1, NULL);
-			memcpy(&outdata.tv, &t1, sizeof(outdata.tv));
+			if (!async_mode) {
+				/* Avoid alignment problems by copying bytewise: */
+				(void)gettimeofday(&t1, NULL);
+				memcpy(&outdata.tv, &t1, sizeof(outdata.tv));
 
-			/* Finalize and send packet */
-			(*proto->prepare)(&outdata);
-			send_probe(seq, ttl);
-			++sentfirst;
-
+				/* Finalize and send packet */
+				(*proto->prepare)(&outdata);
+				send_probe(seq, ttl);
+				++sentfirst;
+			}
 			/* Wait for a reply */
-			while ((cc = wait_for_reply(s, from, &t1)) != 0) {
+			while ((cc = async_mode ?
+			    (async_read++ ? 0 : async_reply(seq, from, &t1, &t2)) :
+			    wait_for_reply(s, from, &t1)) != 0) {
 				double T;
 				int precis;
 
-				(void)gettimeofday(&t2, NULL);
+				if (!async_mode)
+					(void)gettimeofday(&t2, NULL);
 				i = packet_ok(packet, cc, from, seq);
 				/* Skip short packet */
 				if (i == 0)
@@ -1058,7 +1100,7 @@ main(int argc, char **argv)
 #endif
 					precis = 3;
 				Printf("  %.*f ms", precis, T);
-				if (ecnflag) {
+				if (ecnflag && (!async_mode || i != -2)) {
 					u_char ecn = hip->ip_tos & IPTOS_ECN_MASK;
 					switch (ecn) {
 					case IPTOS_ECN_ECT1:
@@ -1198,14 +1240,16 @@ main(int argc, char **argv)
 			(void)fflush(stdout);
 		}
 		if (sump) {
-			Printf(" (%d%% loss)", (loss * 100) / nprobes);
+			Printf(" (%d%% loss)", (int)((int64_t)loss * 100 / nprobes));
 		}
 		putchar('\n');
 		if (got_there ||
 		    (unreachable > 0 && unreachable >= nprobes - 1))
 			break;
 	}
-	if (as_path)
+	if (async_mode)
+		async_free();
+	if (asn != NULL)
 		as_shutdown(asn);
 	exit(0);
 }
@@ -1359,9 +1403,12 @@ packet_ok(register u_char *buf, int cc, register struct sockaddr_in *from,
 #ifndef ARCHAIC
 	register struct ip *ip;
 
+	if (cc < (int)sizeof(struct ip))
+		return (0);
 	ip = (struct ip *) buf;
 	hlen = ip->ip_hl << 2;
-	if (cc < hlen + ICMP_MINLEN) {
+	if (ip->ip_v != IPVERSION || hlen < (int)sizeof(struct ip) ||
+	    cc < hlen + ICMP_MINLEN) {
 		if (verbose)
 			Printf("packet too short (%d bytes) from %s\n", cc,
 				inet_ntoa(from->sin_addr));
@@ -1382,19 +1429,22 @@ packet_ok(register u_char *buf, int cc, register struct sockaddr_in *from,
 	}
 	if (type == ICMP_ECHOREPLY
 	    && proto->num == IPPROTO_ICMP
-	    && (*proto->check)((u_char *)icp, (u_char)seq))
+	    && (*proto->check)((u_char *)icp, async_mode ? seq : (u_char)seq))
 		return (-2);
 	if ((type == ICMP_TIMXCEED && code == ICMP_TIMXCEED_INTRANS) ||
 	    type == ICMP_UNREACH) {
 		u_char *inner;
 
+		if (cc < ICMP_MINLEN + (int)sizeof(struct ip))
+			return (0);
 		hip = &icp->icmp_ip;
 		hiplen = ((u_char *)icp + cc) - (u_char *)hip;
 		hlen = hip->ip_hl << 2;
 		inner = (u_char *)((u_char *)hip + hlen);
-		if (hlen + 16 <= cc
+		if (hip->ip_v == IPVERSION && hlen >= (int)sizeof(struct ip) &&
+		    hlen + 16 <= cc
 		    && hip->ip_p == proto->num
-		    && (*proto->check)(inner, (u_char)seq))
+		    && (*proto->check)(inner, async_mode ? seq : (u_char)seq))
 			return (type == ICMP_TIMXCEED ? -1 : code + 1);
 	}
 #ifndef ARCHAIC
@@ -1456,8 +1506,11 @@ int
 udp_check(const u_char *data, int seq)
 {
 	struct udphdr *const udp = (struct udphdr *) data;
+	int sport = ident + (fixedPort ? seq : 0);
 
-	return (ntohs(udp->uh_sport) == ident + (fixedPort ? seq : 0) &&
+	if (async_mode)
+		sport = (u_short)sport;
+	return (ntohs(udp->uh_sport) == sport &&
 	    ntohs(udp->uh_dport) == port + (fixedPort ? 0 : seq));
 }
 
@@ -2089,7 +2142,7 @@ usage(void)
 	Fprintf(stderr,
 	    "Usage: %s [-adDeEFInrSvx] [-A as_server] [-f first_ttl] [-g gateway]\n"
 	    "\t[-i iface] [-m max_ttl] [-M first_ttl] [-p port] [-P proto]\n"
-	    "\t[-q nprobes] [-s src_addr] [-t tos] [-w waittime]\n"
+	    "\t[-q nprobes | -Q nprobes] [-s src_addr] [-t tos] [-w waittime]\n"
 	    "\t[-z pausemsecs] host [packetlen]\n", prog);
 	exit(1);
 }

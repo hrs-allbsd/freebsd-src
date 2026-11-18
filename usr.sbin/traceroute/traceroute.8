@@ -36,7 +36,7 @@
 .Op Fl M Ar first_ttl
 .Op Fl p Ar port
 .Op Fl P Ar proto
-.Op Fl q Ar nprobes
+.Op Fl q Ar nprobes | Fl Q Ar nprobes
 .Op Fl s Ar src_addr
 .Op Fl t Ar tos
 .Op Fl w Ar waittime
@@ -201,10 +201,45 @@ This option is useful for determining which router along a path may be blocking
 packets based on IP protocol number.
 But see BUGS below.
 .It Fl q Ar nprobes
-Set the number of probes per hop (default is 3, unless
+Send
+.Ar nprobes
+probes per hop, waiting for each before sending the next.
+The default is 3, or 1 with
+.Fl D .
+This option is mutually exclusive with
+.Fl Q .
+.It Fl Q Ar nprobes
+Send
+.Ar nprobes
+probes per hop (1 to 255), collecting replies asynchronously.
+Multiple probes at the same TTL may await replies concurrently.
+This option is mutually exclusive with
+.Fl q .
+Probes are sent in TTL and probe order.
+Each probe has its own
+.Fl w
+second timeout measured from transmission.
+Replies are stored and printed in TTL and probe order.
+The RTT is measured before address and AS number lookups.
+.Pp
+This mode supports UDP and ICMP
+.Pq Fl I
+only, and cannot be combined with
 .Fl D
-is specified,
-when it is 1).
+or
+.Fl v .
+The total number of probes must not exceed 65535.
+For UDP without
+.Fl e ,
+the base port plus the total number of probes must not exceed 65535.
+.Pp
+Probes beyond the final hop may already have been sent when it is discovered.
+Their replies are not printed.
+Asynchronous transmission may change ICMP rate limiting, loss and route
+observations; identical results are not guaranteed.
+Use a small window and
+.Fl z
+to control the sending rate.
 .It Fl r
 Bypass the normal routing tables and send directly to a host on an attached
 network.
@@ -257,6 +292,12 @@ probes
 So they are always calculated when using ICMP.
 .It Fl z Ar pausemsecs
 Set the time (in milliseconds) to pause between probes (default 0).
+With
+.Fl Q ,
+the timer sends another probe after this interval (default 30 ms).
+A matching response can advance the next send when
+.Fl z
+is omitted.
 Some systems such as Solaris and routers such as Ciscos rate limit ICMP
 messages.
 A good value to use with this is 500 (e.g., 1/2 second).
