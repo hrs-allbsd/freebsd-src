@@ -960,7 +960,7 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	if (as_path) {
+	if (as_path && !async_mode) {
 		asn = as_setup(as_server);
 		if (asn == NULL) {
 			Fprintf(stderr, "%s: as_setup failed, AS# lookups"
@@ -984,6 +984,9 @@ main(int argc, char **argv)
 	else
 		cansandbox = false;
 #endif
+
+	if (async_mode)
+		lookup_start(cansandbox);
 
 	caph_cache_catpages();
 
@@ -1031,8 +1034,10 @@ main(int argc, char **argv)
 	Fprintf(stderr, ", %d hops max, %d byte packets\n", max_ttl, packlen);
 	(void)fflush(stderr);
 
-	if (async_mode)
+	if (async_mode) {
 		async_trace();
+		lookup_finish();
+	}
 
 	for (ttl = first_ttl; ttl <= max_ttl; ++ttl) {
 		u_int32_t lastaddr = 0;
@@ -1714,6 +1719,10 @@ print(register u_char *buf, register int cc, register struct sockaddr_in *from)
 	cc -= hlen;
 
 	strlcpy(addr, inet_ntoa(from->sin_addr), sizeof(addr));
+	if (async_mode) {
+		lookup_print(from->sin_addr, addr);
+		return;
+	}
 
 	while(as_path) {
 		as = as_lookup(asn, addr, AF_INET, &status);

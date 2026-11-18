@@ -221,6 +221,11 @@ Each probe has its own
 second timeout measured from transmission.
 Replies are stored and printed in TTL and probe order.
 The RTT is measured before address and AS number lookups.
+Reverse DNS and requested AS lookups proceed while probes are collected.
+After collection, outstanding lookups are given up to five additional
+seconds in total.
+Addresses whose names are unavailable are printed numerically, and
+unavailable AS numbers are omitted.
 .Pp
 This mode supports UDP and ICMP
 .Pq Fl I

@@ -32,15 +32,17 @@ async_now(struct timeval *tv)
 	return ((int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000);
 }
 
+#include "async_lookup.h"
+
 static void
 async_trace(void)
 {
 	int *pending, npending, next, slot, i, received, cc, code;
-	int completed, end;
+	int completed, end, nfds;
 	int64_t now, wake, nextsend;
 	struct async_probe *p;
 	struct outdata data;
-	fd_set readfds;
+	fd_set readfds, writefds;
 	struct timeval timeout;
 	struct sockaddr_in from;
 	struct timeval received_at;
@@ -87,6 +89,8 @@ async_trace(void)
 				p->cc = cc;
 				p->from = from;
 				p->t2 = received_at;
+				if (slot < end)
+					lookup_enqueue(from.sin_addr);
 				memcpy(p->packet, buf, cc);
 				pending[i] = pending[--npending];
 				if (async_reply_wakes_sender)
@@ -113,6 +117,11 @@ async_trace(void)
 			completed++;
 		if (completed >= end)
 			break;
+		nfds = s + 1;
+		FD_ZERO(&readfds);
+		FD_ZERO(&writefds);
+		FD_SET(s, &readfds);
+		lookup_selectfds(&readfds, &writefds, &nfds);
 		if (next < async_count && now >= nextsend) {
 			slot = next++;
 			p = &async_probes[slot];
@@ -133,9 +142,7 @@ async_trace(void)
 		wake = wake > now ? wake - now : 0;
 		timeout.tv_sec = wake / 1000000;
 		timeout.tv_usec = wake % 1000000;
-		FD_ZERO(&readfds);
-		FD_SET(s, &readfds);
-		if (select(s + 1, &readfds, NULL, NULL, &timeout) == -1) {
+		if (select(nfds, &readfds, &writefds, NULL, &timeout) == -1) {
 			if (errno == EINTR)
 				continue;
 			err(1, "select asynchronous probes");
