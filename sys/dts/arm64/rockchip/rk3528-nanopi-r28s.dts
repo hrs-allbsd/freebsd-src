@@ -374,6 +374,13 @@
 			reset-names = "crypto-rst";
 		};
 
+		rng@ffc50000 {
+			compatible = "rockchip,rk3528-rkrng", "rockchip,rkrng";
+			reg = <0 0xffc50000 0 0x200>;
+			clocks = <&scmi_clocks SCMI_HCLK_TRNG>;
+			clock-names = "hclk_trng";
+		};
+
 		ioc: syscon@ff540000 {
 			compatible = "rockchip,rk3528-ioc-grf", "syscon";
 			reg = <0 0xff540000 0 0x40000>;
