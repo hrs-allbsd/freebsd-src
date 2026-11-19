@@ -222,19 +222,23 @@ A non-zero value enables I/O space register mapping.
 The default value is 0 to use memory space register mapping.
 .El
 .Sh SYSCTL VARIABLES
-The following variables are available as both
-.Xr sysctl 8
-variables and
-.Xr loader 8
-tunables:
+The following variables are available through
+.Xr sysctl 8 :
 .Bl -tag -width "xxxxxx"
 .It Va dev.re.%d.int_rx_mod
+Also available as a
+.Xr loader 8
+tunable.
 Maximum amount of time to delay receive interrupt processing in
 units of 1us.
 The accepted range is 0 to 65, the default is 65(65us).
 Value 0 completely disables the interrupt moderation.
 The interface need to be brought down and up again before a change
 takes effect.
+.It Va dev.re.%d.rx_budget
+Maximum receive descriptors processed in one receive service call.
+The accepted range is 16 to 256, and the default is 16.
+Changes take effect on the next receive service call.
 .El
 .Sh DIAGNOSTICS
 .Bl -diag

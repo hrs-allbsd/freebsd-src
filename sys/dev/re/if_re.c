@@ -2251,9 +2251,10 @@ re_rxeof(struct rl_softc *sc, int *rx_npktsp)
 	int			i, rxerr, total_len;
 	struct rl_desc		*cur_rx;
 	u_int32_t		rxstat, rxvlan;
-	int			jumbo, maxpkt = 16, rx_npkts = 0;
+	int			jumbo, maxpkt, rx_npkts = 0;
 
 	RL_LOCK_ASSERT(sc);
+	maxpkt = sc->rl_rx_budget;
 
 	ifp = sc->rl_ifp;
 #ifdef DEV_NETMAP
@@ -4205,6 +4206,26 @@ re_clrwol(struct rl_softc *sc)
 	CSR_WRITE_1(sc, sc->rl_cfg5, v);
 }
 
+static int
+re_sysctl_rx_budget(SYSCTL_HANDLER_ARGS)
+{
+	struct rl_softc *sc = arg1;
+	int budget, error;
+
+	RL_LOCK(sc);
+	budget = sc->rl_rx_budget;
+	RL_UNLOCK(sc);
+	error = sysctl_handle_int(oidp, &budget, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (budget < 16 || budget > 256)
+		return (EINVAL);
+	RL_LOCK(sc);
+	sc->rl_rx_budget = budget;
+	RL_UNLOCK(sc);
+	return (0);
+}
+
 static void
 re_add_sysctls(struct rl_softc *sc)
 {
@@ -4214,6 +4235,11 @@ re_add_sysctls(struct rl_softc *sc)
 
 	ctx = device_get_sysctl_ctx(sc->rl_dev);
 	children = SYSCTL_CHILDREN(device_get_sysctl_tree(sc->rl_dev));
+
+	sc->rl_rx_budget = 16;
+	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "rx_budget",
+	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+	    re_sysctl_rx_budget, "I", "Maximum RX descriptors per service call");
 
 	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "stats",
 	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT, sc, 0,
