@@ -33,7 +33,7 @@ LIBADD+=	cap_dns
 CFLAGS+=	-DWITH_CASPER
 .endif
 
-LIBADD+=	ipsec
+LIBADD+=	ipsec tinfow
 
 .include <bsd.prog.mk>
 

@@ -56,7 +56,7 @@
 .Op Fl p Ar port
 .Ek
 .Bk -words
-.Op Fl q Ar probes
+.Op Fl q Ar probes | Fl Q Ar probes
 .Ek
 .Bk -words
 .Op Fl s Ar src
@@ -141,8 +141,44 @@ datagrams.
 Set SCTP/TCP/UDP port number to
 .Ar port .
 .It Fl q Ar probes
-Set the number of probe per hop count to
-.Ar probes .
+Send
+.Ar probes
+probes per hop, waiting for each reply before sending the next probe.
+The default is three.
+.It Fl Q Ar probes
+Send
+.Ar probes
+probes per hop (1 to 255), collecting replies asynchronously.
+This option is mutually exclusive with
+.Fl q .
+It supports UDP and ICMPv6
+.Pq Fl I
+and cannot be combined with
+.Fl v .
+Probes at different hop limits and multiple probes at the same hop limit
+may await replies concurrently.
+Each probe has its own
+.Fl w
+timeout measured from transmission.
+Replies are printed in hop and probe order.
+Probing above a hop stops when the destination is reached, or when
+at least half of the probes for that hop return other destination
+unreachable replies.
+Without
+.Fl m ,
+the initial maximum hop limit is 64.
+If the first probe at every initial hop finishes without meeting a
+stopping condition, extend the search by up to five hops.
+Repeat the extension after the first transmitted probe for each new hop
+finishes without meeting a stopping condition, up to hop limit 255
+or the available range of probe identifiers.
+Automatic extension requires at least two probes per hop.
+A dot marks an unsent probe.
+.Pp
+Reverse DNS and requested AS lookups run during collection, with up to
+five additional seconds for outstanding lookups afterward.
+Capable terminals show a numeric progress display during collection.
+A question mark marks a pending probe, and an asterisk marks a timeout.
 .It Fl r
 Bypass the normal routing tables and send directly to a host on an attached
 network.
@@ -183,6 +219,9 @@ Set the time in seconds to wait for a reply (default 5).
 .It Fl z Ar pausemsecs
 Set the minimum interval in milliseconds between probes sent to the
 same hop limit (default 0).
+With
+.Fl Q ,
+other hop limits can send independently during this interval.
 .El
 .Pp
 This program prints the route to the given destination and the round-trip time

@@ -11,6 +11,7 @@ DIRDEPS = \
 	lib/libcasper/services/cap_dns \
 	lib/libcompiler_rt \
 	lib/libipsec \
+	lib/ncurses/tinfo \
 
 
 .include <dirdeps.mk>

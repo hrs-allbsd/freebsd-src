@@ -235,6 +235,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/select.h>
 #include <sys/capsicum.h>
 #include <sys/time.h>
 #include <sys/socket.h>
@@ -259,6 +260,8 @@
 #endif
 #include <errno.h>
 #include <limits.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -288,6 +291,7 @@ static char 	*outpacket;		/* last output packet */
 
 int	main(int, char *[]);
 int	wait_for_reply(int, struct msghdr *);
+static ssize_t receive_reply(int, struct msghdr *, int);
 #if defined(IPSEC) && defined(IPSEC_POLICY_IPSEC)
 int	setpolicy(int so, char *policy);
 #endif
@@ -349,7 +353,136 @@ static int as_path;			/* print as numbers for each hop */
 static int ecnflag;			/* ECN bleaching detection flag */
 static char *as_server = NULL;
 static void *asn;
+static bool async_mode;
 static unsigned int pausemsecs;
+
+#define	ASYNC_FAMILY		AF_INET6
+
+typedef struct {
+	struct in6_addr addr;
+	uint32_t scope;
+} async_addr_t;
+
+struct async_received {
+	async_addr_t from;
+	struct sockaddr_in6 sender;
+	int hoplimit, length;
+	u_char type, code, ecn;
+};
+
+static int
+async_receive_fd(void)
+{
+
+	return (rcvsock);
+}
+
+static async_addr_t
+async_addr(const struct sockaddr_in6 *sa)
+{
+
+	return ((async_addr_t){ .addr = sa->sin6_addr,
+	    .scope = sa->sin6_scope_id });
+}
+
+static bool
+async_addr_equal(const async_addr_t *a, const async_addr_t *b)
+{
+
+	return (IN6_ARE_ADDR_EQUAL(&a->addr, &b->addr) && a->scope == b->scope);
+}
+
+static void
+async_numeric(const async_addr_t *addr, char *buf, size_t len)
+{
+
+	(void)inet_ntop(AF_INET6, &addr->addr, buf, len);
+}
+
+static void
+async_destination(char *buf, size_t len)
+{
+
+	(void)inet_ntop(AF_INET6, &Dst.sin6_addr, buf, len);
+}
+
+static const char *
+async_name(const async_addr_t *addr)
+{
+	struct sockaddr_in6 sa = {
+		.sin6_len = sizeof(sa),
+		.sin6_family = AF_INET6,
+		.sin6_addr = addr->addr,
+		.sin6_scope_id = addr->scope,
+	};
+
+	return (inetname((struct sockaddr *)&sa));
+}
+
+#include "async.h"
+
+static int
+async_available(void)
+{
+
+	return (UINT16_MAX - (useproto == IPPROTO_UDP && !fixedPort ?
+	    port : 0));
+}
+
+static int
+async_receive(struct async_received *reply)
+{
+
+	reply->ecn = 0;
+	reply->length = receive_reply(rcvsock, &rcvmhdr, MSG_DONTWAIT);
+	return (reply->length);
+}
+
+static enum async_match
+async_match_reply(struct async_received *reply, int seq)
+{
+
+	if (!packet_ok(&rcvmhdr, reply->length, seq, &reply->type,
+	    &reply->code, &reply->ecn))
+		return (ASYNC_NO_MATCH);
+	reply->from = async_addr(&Rcv);
+	reply->sender = Rcv;
+	reply->hoplimit = rcvhlim;
+	if (reply->type == ICMP6_ECHO_REPLY ||
+	    reply->type == ICMP6_PARAM_PROB ||
+	    (reply->type == ICMP6_DST_UNREACH &&
+	    reply->code == ICMP6_DST_UNREACH_NOPORT))
+		return (ASYNC_DESTINATION);
+	if (reply->type == ICMP6_DST_UNREACH)
+		return (ASYNC_UNREACHABLE);
+	return (ASYNC_HOP);
+}
+
+static void
+async_send(int seq, int hops, struct timeval *sent __unused)
+{
+
+	send_probe(seq, hops);
+}
+
+static int
+async_reply(int seq, struct timeval *t1, struct timeval *t2, u_char *type,
+    u_char *code, u_char *ecn)
+{
+	const struct async_probe *probe;
+
+	probe = &async_probes[seq - 1];
+	if (!probe->reply)
+		return (0);
+	Rcv = probe->received.sender;
+	rcvhlim = probe->received.hoplimit;
+	*type = probe->received.type;
+	*code = probe->received.code;
+	*ecn = probe->received.ecn;
+	*t1 = probe->t1;
+	*t2 = probe->t2;
+	return (probe->received.length);
+}
 
 static void
 pause_probe(void)
@@ -368,6 +501,7 @@ main(int argc, char *argv[])
 	int mib[4] = { CTL_NET, PF_INET6, IPPROTO_IPV6, IPV6CTL_DEFHLIM };
 	char hbuf[NI_MAXHOST], src0[NI_MAXHOST], *ep;
 	int ch, i, on = 1, seq, error;
+	bool max_set = false, serial_set = false, extend = false;
 	struct addrinfo hints, *res;
 	static u_char *rcvcmsgbuf;
 	u_long probe, hops, lport, ltclass, pause;
@@ -420,7 +554,8 @@ main(int argc, char *argv[])
 	seq = 0;
 	ident = htons(getpid() & 0xffff); /* same as ping6 */
 
-	while ((ch = getopt(argc, argv, "aA:deEf:g:Ilm:nNp:q:rs:St:TUvw:z:")) != -1)
+	while ((ch = getopt(argc, argv,
+	    "aA:deEf:g:Ilm:nNp:q:Q:rs:St:TUvw:z:")) != -1)
 		switch (ch) {
 		case 'a':
 			as_path = 1;
@@ -484,6 +619,7 @@ main(int argc, char *argv[])
 		case 'l':
 			break;
 		case 'm':
+			max_set = true;
 			ep = NULL;
 			errno = 0;
 			max_hops = strtoul(optarg, &ep, 0);
@@ -515,6 +651,11 @@ main(int argc, char *argv[])
 			port = lport & 0xffff;
 			break;
 		case 'q':
+			serial_set = true;
+			/* FALLTHROUGH */
+		case 'Q':
+			if (ch == 'Q')
+				async_mode = true;
 			ep = NULL;
 			errno = 0;
 			nprobes = strtoul(optarg, &ep, 0);
@@ -523,6 +664,8 @@ main(int argc, char *argv[])
 				    "traceroute6: invalid nprobes.\n");
 				exit(1);
 			}
+			if (ch == 'Q' && (nprobes < 1 || nprobes > UINT8_MAX))
+				errx(1, "-Q requires between 1 and 255 probes");
 			if (nprobes < 1) {
 				fprintf(stderr,
 				    "traceroute6: nprobes must be >0.\n");
@@ -590,6 +733,25 @@ main(int argc, char *argv[])
 		}
 	argc -= optind;
 	argv += optind;
+
+	if (async_mode) {
+		if (serial_set)
+			errx(1, "-q and -Q are mutually exclusive");
+		if (useproto != IPPROTO_UDP && useproto != IPPROTO_ICMPV6)
+			errx(1, "-Q supports only UDP and ICMPv6 (-I)");
+		if (verbose)
+			errx(1, "-Q cannot be combined with -v");
+		if (!max_set) {
+			max_hops = ASYNC_DEFAULT_TTL;
+			extend = nprobes > 1;
+		}
+		if (first_hop == 0)
+			errx(1, "-Q requires a positive first hop limit");
+		if (max_hops >= first_hop &&
+		    nprobes * (max_hops - first_hop + 1) >
+		    (unsigned int)async_available())
+			errx(1, "-Q probe identifiers exhausted; lower -p, -Q or -m");
+	}
 
 	/*
 	 * Open socket to send probe packets.
@@ -911,7 +1073,7 @@ main(int argc, char *argv[])
 		srcport = ntohs(Src.sin6_port);
 	}
 
-	if (as_path) {
+	if (as_path && !async_mode) {
 		asn = as_setup(as_server);
 		if (asn == NULL) {
 			fprintf(stderr,
@@ -921,7 +1083,7 @@ main(int argc, char *argv[])
 			as_path = 0;
 		}
 	}
-	if (as_path)
+	if (as_path && !async_mode)
 	        signal(SIGPIPE, SIG_IGN);
 
 	/*
@@ -948,6 +1110,17 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
+	if (async_mode) {
+		async_display_init(first_hop, extend ?
+		    async_ttl_limit(first_hop, nprobes, async_available()) :
+		    max_hops);
+#ifdef WITH_CASPER
+		lookup_start(true);
+#else
+		lookup_start(false);
+#endif
+	}
+
 	/*
 	 * Here we enter capability mode. Further down access to global
 	 * namespaces (e.g filesystem) is restricted (see capsicum(4)).
@@ -971,6 +1144,12 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
+	if (async_mode) {
+		max_hops = async_trace(rcvsock, first_hop, max_hops, nprobes,
+		    async_available(), (nprobes + 1) / 2, pausemsecs, extend);
+		lookup_finish();
+	}
+
 	/*
 	 * Main loop
 	 */
@@ -985,13 +1164,24 @@ main(int argc, char *argv[])
 			int cc;
 			struct timeval t1, t2;
 
-			if (probe > 0 && pausemsecs > 0)
-				pause_probe();
-			(void) gettimeofday(&t1, NULL);
-			send_probe(++seq, hops);
-			while ((cc = wait_for_reply(rcvsock, &rcvmhdr))) {
-				(void) gettimeofday(&t2, NULL);
-				if (packet_ok(&rcvmhdr, cc, seq, &type, &code, &ecn)) {
+			if (async_mode) {
+				if (!async_probes[seq++].sent) {
+					printf(" .");
+					continue;
+				}
+			} else {
+				if (probe > 0 && pausemsecs > 0)
+					pause_probe();
+				(void)gettimeofday(&t1, NULL);
+				send_probe(++seq, hops);
+			}
+			while ((cc = async_mode ?
+			    async_reply(seq, &t1, &t2, &type, &code, &ecn) :
+			    wait_for_reply(rcvsock, &rcvmhdr)) != 0) {
+				if (!async_mode)
+					(void)gettimeofday(&t2, NULL);
+				if (async_mode || packet_ok(&rcvmhdr, cc, seq,
+				    &type, &code, &ecn)) {
 					if (!IN6_ARE_ADDR_EQUAL(&Rcv.sin6_addr,
 					    &lastaddr)) {
 						if (probe > 0)
@@ -1068,10 +1258,14 @@ main(int argc, char *argv[])
 		putchar('\n');
 		if (got_there ||
 		    (unreachable > 0 && unreachable >= ((nprobes + 1) / 2))) {
+			if (async_mode)
+				break;
 			exit(0);
 		}
 	}
-	if (as_path)
+	if (async_mode)
+		async_free();
+	else if (as_path)
 		as_shutdown(asn);
 
 	exit(0);
@@ -1462,7 +1656,9 @@ packet_ok(struct msghdr *mhdr, int cc, int seq, u_char *type, u_char *code,
 			break;
 		case IPPROTO_UDP:
 			udp = (struct udphdr *)up;
-			if (ntohs(udp->uh_sport) == ident + (fixedPort ? seq : 0) &&
+			if (ntohs(udp->uh_sport) == (async_mode ?
+			    (uint16_t)(ident + (fixedPort ? seq : 0)) :
+			    ident + (fixedPort ? seq : 0)) &&
 			    ntohs(udp->uh_dport) == port + (fixedPort ? 0 : seq))
 				return (1);
 			break;
@@ -1626,6 +1822,10 @@ print(struct msghdr *mhdr, int cc)
 	if (cap_getnameinfo(capdns, (struct sockaddr *)from, from->sin6_len,
 	    hbuf, sizeof(hbuf), NULL, 0, NI_NUMERICHOST) != 0)
 		strlcpy(hbuf, "invalid", sizeof(hbuf));
+	if (async_mode) {
+		lookup_print(async_addr(from), hbuf);
+		return;
+	}
 	while (as_path) {
 		as = as_lookup(asn, hbuf, AF_INET6, &status);
 		if (status) {
@@ -1884,7 +2084,7 @@ usage(void)
 {
 	fprintf(stderr,
 "Usage: traceroute6 [-adeEIlnNrSTUv] [-A as_server] [-f firsthop] [-g gateway]\n"
-"\t[-m hoplimit] [-p port] [-q probes] [-s src] [-t tclass]\n"
+"\t[-m hoplimit] [-p port] [-q probes | -Q probes] [-s src] [-t tclass]\n"
 "\t[-w waittime] [-z pausemsecs] target [datalen]\n");
 	exit(1);
 }
