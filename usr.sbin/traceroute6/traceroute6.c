@@ -1000,7 +1000,7 @@ main(int argc, char *argv[])
 						lastaddr = Rcv.sin6_addr;
 					}
 					printf("  %.3f ms", deltaT(&t1, &t2));
-					if (ecnflag) {
+					if (ecnflag && type != ICMP6_ECHO_REPLY) {
 						switch (ecn) {
 						case IPTOS_ECN_ECT1:
 							printf(" (ecn=passed)");
@@ -1447,12 +1447,12 @@ packet_ok(struct msghdr *mhdr, int cc, int seq, u_char *type, u_char *code,
 		void *up;
 
 		hip = (struct ip6_hdr *)(icp + 1);
-		*ecn = ntohl(hip->ip6_flow & IPV6_ECN_MASK) >> 20;
 		if ((up = get_uphdr(hip, (u_char *)(buf + cc))) == NULL) {
 			if (verbose)
 				warnx("failed to get upper layer header");
 			return (0);
 		}
+		*ecn = ntohl(hip->ip6_flow & IPV6_ECN_MASK) >> 20;
 		switch (useproto) {
 		case IPPROTO_ICMPV6:
 			icmp = (struct icmp6_hdr *)up;
@@ -1585,6 +1585,8 @@ get_uphdr(struct ip6_hdr *ip6, u_char *lim)
 			break;
 		}
 
+		if (hlen > lim - cp)
+			return (NULL);
 		cp += hlen;
 	}
 
