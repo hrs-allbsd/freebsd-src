@@ -3,6 +3,7 @@
  *
  * Copyright (c) 2019 Emmanuel Vadot <manu@FreeBSD.Org>
  * Copyright (c) 2021-2022 Bjoern A. Zeeb <bz@FreeBSD.ORG>
+ * Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -392,6 +393,7 @@ snps_dwc3_common_attach(device_t dev, bool is_fdt)
 	phandle_t node;
 	phy_t usb2_phy, usb3_phy;
 	uint32_t reg;
+	char maximum_speed[32];
 #endif
 	int error, rid;
 
@@ -491,6 +493,14 @@ snps_dwc3_common_attach(device_t dev, bool is_fdt)
 		}
 	}
 	snps_dwc3_configure_phy(sc, node);
+	/* USB2-only boards may leave the combo PHY assigned to PCIe. */
+	if (OF_getprop(node, "maximum-speed", maximum_speed,
+	    sizeof(maximum_speed)) == sizeof("high-speed") &&
+	    memcmp(maximum_speed, "high-speed", sizeof("high-speed")) == 0) {
+		reg = DWC3_READ(sc, DWC3_GUCTL1);
+		reg |= DWC3_GUCTL1_DEV_FORCE_20_CLK_FOR_30_CLK;
+		DWC3_WRITE(sc, DWC3_GUCTL1, reg);
+	}
 skip_phys:
 #endif
 
