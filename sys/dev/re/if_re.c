@@ -2239,6 +2239,36 @@ re_jrx_list_init(struct rl_softc *sc)
 }
 
 /*
+ * Copy a complete frame to an aligned mbuf and rearm the original
+ * descriptor without unloading its DMA map.
+ */
+static struct mbuf *
+re_rx_reuse(struct rl_softc *sc, int idx, int len)
+{
+	struct rl_rxdesc *rxd;
+	struct mbuf *m;
+
+	RL_LOCK_ASSERT(sc);
+	rxd = &sc->rl_ldata.rl_rx_desc[idx];
+	if (len < ETHER_HDR_LEN || len > MCLBYTES - ETHER_ALIGN ||
+	    (bus_size_t)len + ETHER_CRC_LEN > rxd->rx_size)
+		return (NULL);
+	m = m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR);
+	if (m == NULL)
+		return (NULL);
+	m->m_len = m->m_pkthdr.len = MCLBYTES;
+	m_adj(m, ETHER_ALIGN);
+	bus_dmamap_sync(sc->rl_ldata.rl_rx_mtag, rxd->rx_dmamap,
+	    BUS_DMASYNC_POSTREAD);
+	memcpy(mtod(m, void *), mtod(rxd->rx_m, const void *), len);
+	m->m_len = m->m_pkthdr.len = len;
+	bus_dmamap_sync(sc->rl_ldata.rl_rx_mtag, rxd->rx_dmamap,
+	    BUS_DMASYNC_PREREAD);
+	re_discard_rxbuf(sc, idx);
+	return (m);
+}
+
+/*
  * RX handler for C+ and 8169. For the gigE chips, we support
  * the reception of jumbo frames that have been fragmented
  * across multiple 2K mbuf cluster buffers.
@@ -2246,7 +2276,7 @@ re_jrx_list_init(struct rl_softc *sc)
 static int
 re_rxeof(struct rl_softc *sc, int *rx_npktsp)
 {
-	struct mbuf		*m;
+	struct mbuf		*m, *copy;
 	if_t ifp;
 	int			i, rxerr, total_len;
 	struct rl_desc		*cur_rx;
@@ -2373,7 +2403,13 @@ re_rxeof(struct rl_softc *sc, int *rx_npktsp)
 		 * If allocating a replacement mbuf fails,
 		 * reload the current one.
 		 */
-		if (jumbo != 0)
+		copy = NULL;
+		if (sc->rl_rx_reuse != 0 && jumbo == 0 && sc->rl_head == NULL)
+			copy = re_rx_reuse(sc, i, total_len - ETHER_CRC_LEN);
+		if (copy != NULL) {
+			m = copy;
+			rxerr = 0;
+		} else if (jumbo != 0)
 			rxerr = re_jumbo_newbuf(sc, i);
 		else
 			rxerr = re_newbuf(sc, i);
@@ -2418,7 +2454,8 @@ re_rxeof(struct rl_softc *sc, int *rx_npktsp)
 			    (total_len - ETHER_CRC_LEN);
 
 #ifdef RE_FIXUP_RX
-		re_fixup_rx(m);
+		if (copy == NULL)
+			re_fixup_rx(m);
 #endif
 		if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 		m->m_pkthdr.rcvif = ifp;
@@ -4226,6 +4263,26 @@ re_sysctl_rx_budget(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 
+static int
+re_sysctl_rx_reuse(SYSCTL_HANDLER_ARGS)
+{
+	struct rl_softc *sc = arg1;
+	int reuse, error;
+
+	RL_LOCK(sc);
+	reuse = sc->rl_rx_reuse;
+	RL_UNLOCK(sc);
+	error = sysctl_handle_int(oidp, &reuse, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (reuse != 0 && reuse != 1)
+		return (EINVAL);
+	RL_LOCK(sc);
+	sc->rl_rx_reuse = reuse;
+	RL_UNLOCK(sc);
+	return (0);
+}
+
 static void
 re_add_sysctls(struct rl_softc *sc)
 {
@@ -4240,6 +4297,10 @@ re_add_sysctls(struct rl_softc *sc)
 	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "rx_budget",
 	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
 	    re_sysctl_rx_budget, "I", "Maximum RX descriptors per service call");
+
+	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "rx_reuse",
+	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+	    re_sysctl_rx_reuse, "I", "Copy packets out of reusable RX DMA buffers");
 
 	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "stats",
 	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT, sc, 0,

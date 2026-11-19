@@ -919,6 +919,7 @@ struct rl_softc {
 	int			rl_txstart;
 	int			rl_int_rx_act;
 	int			rl_rx_budget;
+	int			rl_rx_reuse;
 	int			rl_int_rx_mod;
 	uint32_t		rl_flags;
 #define	RL_FLAG_MSI		0x00000001

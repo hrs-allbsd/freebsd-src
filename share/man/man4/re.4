@@ -239,6 +239,10 @@ takes effect.
 Maximum receive descriptors processed in one receive service call.
 The accepted range is 16 to 256, and the default is 16.
 Changes take effect on the next receive service call.
+.It Va dev.re.%d.rx_reuse
+Set to 1 to copy eligible received frames into separate mbufs and
+reuse their DMA buffers.
+The default is 0.
 .El
 .Sh DIAGNOSTICS
 .Bl -diag
