@@ -1,8 +1,45 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Hiroki Sato <hrs@FreeBSD.org>
-# GENERIC-based configuration; supply the board DTB through the boot loader.
-include GENERIC
+# GENERIC-derived FreeBSD/arm64 configuration for NanoPi R28S.
+# Keep common facilities and USB peripheral support.
+cpu ARM64
 ident NANOPI_R28S
+include "std.arm64"
+include "std.dev"
+include "std.rockchip"
+
+# RK3528A is the only onboard SoC.
+nooptions SOC_ROCKCHIP_RK3328
+nooptions SOC_ROCKCHIP_RK3399
+nooptions SOC_ROCKCHIP_RK3568
+
+# The exposed USB ports still support storage, HID, network and audio.
+# Omit embedded/PCI controllers that this board cannot accept.
+nodevice ahci
+nodevice nvd
+nodevice nvme
+nodevice em
+nodevice ix
+nodevice uhci
+nodevice tpm
+nooptions RANDOM_ENABLE_TPM
+
+# Other Rockchip boards' fixed-function peripherals.
+nodevice rk_combphy
+nodevice rk8xx
+nodevice rk805
+nodevice rk808
+nodevice rk817
+nodevice fan53555
+nodevice syr827
+nodevice tcs4525
+nodevice eqos
+nodevice rk_typec_phy
+nodevice rk_emmcphy
+
+# RTL8111H is connected to the onboard PCIe root port.
+device re
+device rgephy
 
 options SOC_ROCKCHIP_RK3528
 
@@ -13,6 +50,8 @@ device rk3528_tsadc
 device rk3528_otp_trim
 device rk3528_wdt
 device rk3528_usb2phy
+device scmi
+device arm_doorbell
 device rkcrypto
 
 # Populated eMMC through the standard MMC/GEOM stack.
