@@ -177,6 +177,17 @@
 			bias-disable;
 		};
 
+		i2c1_pins: i2c1-pins {
+			/* GPIO4_A3 SCL and GPIO4_A2 SDA, mux 2. */
+			rockchip,pins = <4 3 2 &pull_none_smt>,
+			    <4 2 2 &pull_none_smt>;
+		};
+
+		pull_none_smt: pull-none-smt {
+			bias-disable;
+			input-schmitt-enable;
+		};
+
 		user_key_pin: user-key-pin {
 			rockchip,pins = <4 10 0 &pull_up>;
 		};
@@ -374,6 +385,24 @@
 			reg = <0 0xff4a0000 0 0x21000>;
 			#clock-cells = <1>;
 			#reset-cells = <1>;
+		};
+
+		i2c1: i2c@ffa58000 {
+			compatible = "rockchip,rk3528-i2c";
+			reg = <0 0xffa58000 0 0x1000>;
+			interrupts = <0 62 4>;
+			clocks = <&cru CLK_I2C1>, <&cru PCLK_I2C1>;
+			clock-names = "i2c", "pclk";
+			pinctrl-names = "default";
+			pinctrl-0 = <&i2c1_pins>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			rtc@51 {
+				compatible = "haoyu,hym8563";
+				reg = <0x51>;
+				#clock-cells = <0>;
+			};
 		};
 
 		pcie: pcie@fe000000 {
